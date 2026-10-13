@@ -4,9 +4,19 @@
 
 ## Non-negotiable rules
 
-- **All code must be covered by automated tests.** No implementation is done until its tests exist and pass.
-- **Every OpenSpec `tasks.md` must include two tasks** — a task to **run the automated tests** and a task to **update the project documentation**. Do not omit either when authoring tasks by hand.
-- Documentation is a deliverable, not a follow-up: the docs task must state which docs change (README, config/options reference).
+- **All code must be covered by automated tests.** New functionality and bug fixes always get one — a bug-fix test must
+  reproduce the original defect (fails before the fix, passes after). An implementation task without tests is not done.
+- **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests, and update the project
+  documentation (`README.md`, `README.ru.md`, `CHANGELOG.md`, config/options reference). Documentation is part of the task,
+  not a follow-up.
+- **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**. `README.ru.md` is
+  maintained in parallel with `README.md` and must change in the same task. Code, identifiers, and file names are always
+  English.
+
+### Where these rules live
+
+The authoritative copies are in `openspec/config.yaml` — `rules.tasks` for authoring `tasks.md`, `operations.apply.guidance`
+for implementation. Edit there first, then mirror here; the two must not drift.
 
 ## Commands
 
@@ -67,6 +77,37 @@ binary — it is not a Node process, so a debugger on *your* Node process will n
 - `ctx.keymap.layer(...)` factories must be **pure**. Layers are torn down when the plugin reloads, is disabled, or the
   component that created them is disposed — do not rely on layer state persisting.
 
+## Git conventions
+
+Commit messages are **English**, Conventional Commits.
+
+Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`. Dependency bumps, build/config changes, and formatting
+land under `chore`.
+
+```text
+<type>(<scope>): <description>
+
+Change: openspec/changes/<name>/
+```
+
+- `<scope>` is the OpenSpec change name — identical to the branch and to the directory under `openspec/changes/`. Omit the
+  scope when there is no change (`chore: bump tsx`).
+- Keep the body short. The code says *what*; the commit says *why*. Long bodies go stale faster than short ones.
+
+Rules:
+
+- **`main` is always green** — all tests pass, every checkbox in `tasks.md` is ticked, no active change is left behind.
+- **One branch per change**, named exactly like its directory: change `openspec/changes/add-duck-say/` lives on branch
+  `add-duck-say`. No prefix — `--change <name>` appears in every OpenSpec command and a prefix would have to be stripped
+  each time. Work that is not a change goes on `chore/<slug>` or `fix/<slug>`.
+- **`feat:` and `fix:` carry their tests in the same commit** — either the test itself, or a pointer to the task that
+  covers it. This is the commit-level enforcement of the rule above.
+- **`docs:` changes `README.md` and `README.ru.md` together**, in one commit, so the two versions cannot drift apart in
+  history.
+- **Squash-merge** the PR into `main`; the PR title becomes the commit message.
+- **Archive after the merge**, as its own commit. `/opsx-archive` moves the change to `archive/` and updates the main
+  specs — that is spec work and does not belong inside a code PR.
+
 ## OpenSpec workflow
 
 The project is spec-driven; planning and implementation are separate phases.
@@ -79,8 +120,11 @@ The project is spec-driven; planning and implementation are separate phases.
   dependencies exist — walk the `requires` edges transitively to find the real required set.
 - Specs live in `openspec/specs/<capability-path>/spec.md`; a change's spec file is a **delta**, not the full spec.
   Preserve an existing capability's full path when adding to it.
-- `openspec/config.yaml` has no `context` field filled in yet. Project-wide constraints go there; per-artifact rules go
-  under `rules.tasks` — consider encoding the two mandatory `tasks.md` tasks there so every generated change inherits them.
+- `openspec/config.yaml` `context` holds the **documentation language rule** (OpenSpec artifacts in Russian, project docs in
+  English with `README.ru.md`) and reaches both artifact generation and apply. `rules.tasks` holds what applies while
+  **authoring** `tasks.md`; `operations.apply.guidance` is the only channel that reaches the **apply** phase — put
+  implementation-time rules there, or they will not be seen while the code is being written. `AGENTS.md` mirrors all
+  three; edit the config first.
 
 ## Docs
 
