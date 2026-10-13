@@ -85,21 +85,22 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`. Dependency bu
 land under `chore`.
 
 ```text
-<type>(<scope>): <description>
+<type>: <description>
 
 Change: openspec/changes/<name>/
 ```
 
-- `<scope>` is the OpenSpec change name — identical to the branch and to the directory under `openspec/changes/`. Omit the
-  scope when there is no change (`chore: bump tsx`).
+- **No scope.** The `Change:` trailer already carries the OpenSpec change name — the directory under
+  `openspec/changes/`, and the branch name once the `feat/` prefix is dropped — and a scope repeating it filters nothing,
+  since every commit of a change would share one value. The trailer is omitted when there is no change.
 - Keep the body short. The code says *what*; the commit says *why*. Long bodies go stale faster than short ones.
 
 Rules:
 
 - **`main` is always green** — all tests pass, every checkbox in `tasks.md` is ticked, no active change is left behind.
-- **One branch per change**, named exactly like its directory: change `openspec/changes/add-duck-say/` lives on branch
-  `add-duck-say`. No prefix — `--change <name>` appears in every OpenSpec command and a prefix would have to be stripped
-  each time. Work that is not a change goes on `chore/<slug>` or `fix/<slug>`.
+- **One branch per change.** New functionality is branched from `main` as `feat/<change-name>`, and that name matches the
+  directory `openspec/changes/<change-name>/` once the prefix is dropped — so `--change <name>` is passed to every OpenSpec
+  command unchanged. Work that is not a change goes on `chore/<slug>` or `fix/<slug>`.
 - **`feat:` and `fix:` carry their tests in the same commit** — either the test itself, or a pointer to the task that
   covers it. This is the commit-level enforcement of the rule above.
 - **`docs:` changes `README.md` and `README.ru.md` together**, in one commit, so the two versions cannot drift apart in
