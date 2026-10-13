@@ -4,29 +4,43 @@ schema: spec-driven
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.
 # Keep general project documentation and discoverable codebase facts out.
-# Example:
-#   context: |
-#     Designs and tasks must cover Windows, macOS, and Linux
-#     Write all artifacts in Spanish
+context: |
+  Язык документации:
+  - Артефакты OpenSpec (proposal, design, specs, tasks) пишутся на русском языке.
+  - Проектная документация (README.md, CHANGELOG.md, справка по конфигурации и опциям)
+    ведется на английском языке. Русская версия README поддерживается в README.ru.md
+    и обновляется вместе с README.md.
+  - Код, идентификаторы и имена файлов — на английском языке.
+  Documentation language: OpenSpec artifacts in Russian; project docs (README.md,
+  CHANGELOG.md, config/options reference) in English, with README.ru.md kept in sync.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always state what is out of scope
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  tasks:
+    - "Для каждой задачи на новый функционал или исправление бага в этом же tasks.md должна быть отдельная задача на написание автотестов — задача на реализацию без задачи на тесты не считается выполненной."
+    - "Тест на исправление бага должен воспроизводить исходный дефект: падать до исправления и проходить после. Тест, который проходит и с дефектом, не защищает от регрессии."
+    - "Каждый tasks.md обязан содержать две обязательные задачи в конце списка, независимо от того, какие задачи требует сама задача."
+    - "Обязательная задача 1 — «Запустить автоматизированные тесты» — выполнить npm test, а пока нет package.json, то npx tsc --noEmit и npx tsx --test, и убедиться, что все проверки проходят."
+    - "Обязательная задача 2 — «Обновить проектную документацию» — перечислить конкретные изменяемые документы (README.md, README.ru.md, CHANGELOG.md, справка по конфигурации и опциям). Документация — часть задачи, а не отдельная работа «на потом». Любое изменение README.md дублируется в README.ru.md в рамках той же задачи."
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.
 # This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+operations:
+  apply:
+    guidance:
+      - "Каждый новый функционал и каждое исправление бага в этом change реализуется вместе с автотестом — задача без теста не считается выполненной."
+      - "Тест на исправление бага сначала должен воспроизводить дефект (падать), и только после исправления проходить. Написать тест по post-mortem описанию недостаточно."
+      - "Перед тем как отметить задачу выполненной, запусти npm test; пока нет package.json — npx tsc --noEmit и npx tsx --test."
+      - "README.md и README.ru.md обновляются в одной и той же задаче; расхождение версий недопустимо."
+      - "Задачи «Запустить автоматизированные тесты» и «Обновить проектную документацию» выполняются последними и тоже отмечаются выполненными."
+  archive:
+    guidance:
+      - "Архивируй change только после того, как он смержен в main, и отдельным коммитом — архивация не должна попадать в PR с кодом."
+      - "Перед архивацией убедись, что openspec validate --strict <имя> проходит и все чекбоксы в tasks.md отмечены."
+      - "Коммит архивации — обычный Conventional Commits на английском, в том же формате, что и остальные коммиты change."
+# Example for archive:
+#   archive:
+#     guidance:
+#       - Summarize the archive outcome before finishing
