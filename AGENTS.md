@@ -106,8 +106,12 @@ Rules:
 - **`docs:` changes `README.md` and `README.ru.md` together**, in one commit, so the two versions cannot drift apart in
   history.
 - **Squash-merge** the PR into `main`; the PR title becomes the commit message.
-- **Archive after the merge**, as its own commit. `/opsx-archive` moves the change to `archive/` and updates the main
-  specs — that is spec work and does not belong inside a code PR.
+- **Archive inside the PR**, as its last commit. `/opsx-archive` creates the main spec and moves the change to `archive/`
+  before the merge, so `main` is consistent the moment it lands — no active change, no capability missing from
+  `openspec/specs/`.
+- Because the archive lands before review closes, a change to a requirement means editing it in **two** places: the
+  archived delta and the main spec. Let them drift and `main` becomes inconsistent anyway — the thing this rule exists to
+  prevent.
 
 ## OpenSpec workflow
 
