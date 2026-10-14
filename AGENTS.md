@@ -121,6 +121,10 @@ The project is spec-driven; planning and implementation are separate phases.
   dependencies exist — walk the `requires` edges transitively to find the real required set.
 - Specs live in `openspec/specs/<capability-path>/spec.md`; a change's spec file is a **delta**, not the full spec.
   Preserve an existing capability's full path when adding to it.
+- **Normative keywords stay English, even in Russian artifacts.** Every requirement must contain `SHALL` or `MUST` in its
+  body — between the `### Requirement` header and the first `#### Scenario`, not in the header itself and not in the
+  scenarios. The validator matches a literal `SHALL`/`MUST` with `/\b(SHALL|MUST)\b/`, so Russian equivalents («должна»,
+  «должен») do not count. Without it `openspec validate --strict <name>` exits non-zero and blocks the archive.
 - `openspec/config.yaml` `context` holds the **documentation language rule** (OpenSpec artifacts in Russian, project docs in
   English with `README.ru.md`) and reaches both artifact generation and apply. `rules.tasks` holds what applies while
   **authoring** `tasks.md`; `operations.apply.guidance` is the only channel that reaches the **apply** phase — put
