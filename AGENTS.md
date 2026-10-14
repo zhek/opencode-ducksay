@@ -21,19 +21,13 @@ for implementation. Edit there first, then mirror here; the two must not drift.
 ## Commands
 
 ```bash
-npx tsx --test            # full suite
-npx tsx --test path/to/x.test.ts   # single file
-npx tsc --noEmit          # typecheck
+bun test                      # full suite
+bun test test/duck.test.ts    # single file
+bunx tsc --noEmit             # typecheck
 ```
 
-These are placeholders until `package.json` exists — wire `npm test` to `tsx --test` and commit it, so the documented
-command and the real one stay identical.
-
-### `node --test` cannot run `.ts` here
-
-The installed Node (v22.22.1) is **not compiled with TypeScript support**, so `node --test foo.test.ts` fails with
-`ERR_UNKNOWN_FILE_EXTENSION`, and `--experimental-strip-types` fails with `ERR_NO_TYPESCRIPT`. This is an environment
-limitation, not a code bug — don't debug the test file. Always invoke the runner through `tsx` (`tsx` is a devDependency).
+The runner is **Bun**, not Node. Rendering tests use `testRender` and `captureCharFrame` from `@opentui/solid`, which sit on
+OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching runners.
 
 ## No build step — do not add one
 
