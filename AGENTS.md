@@ -12,6 +12,10 @@
 - **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**. `README.ru.md` is
   maintained in parallel with `README.md` and must change in the same task. Code, identifiers, and file names are always
   English.
+- **A version bump lands everywhere in the same task.** `version` in `package.json`, the new `## [X.Y.Z] — date` heading in
+  `CHANGELOG.md`, that file's `[X.Y.Z]: …/releases/tag/vX.Y.Z` link, and any documentation naming a version outright. A
+  changelog advertising a version npm does not have is a release defect, not a typo, and the drift stays invisible until
+  somebody installs that version. Check every place before ticking the documentation task off.
 
 ### Where these rules live
 
