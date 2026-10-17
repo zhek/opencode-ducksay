@@ -11,6 +11,9 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "paths": {
+      "solid-js/dist/solid.js": ["./node_modules/solid-js/types/index.d.ts"]
+    },
     "types": ["bun"],
     "lib": ["ESNext"]
   },
