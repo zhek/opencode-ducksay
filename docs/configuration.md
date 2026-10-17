@@ -1,7 +1,7 @@
 # Configuration and options
 
-`opencode-ducksay` has no options of its own. There is nothing to pass in `cli.json` beyond enabling the plugin, and no
-entry to add to an OpenCode config file.
+`opencode-ducksay` has one option, `swimSpeed`, which sets how fast the duck swims across the sidebar. It is optional: with
+nothing configured the duck swims at 12 columns per second.
 
 ## Enabling the plugin
 
@@ -18,6 +18,41 @@ plugin there keeps it active against a remote server as well as a local one.
 
 Restart OpenCode after editing the file. Entry forms accepted by OpenCode for a published package are
 `opencode-ducksay` and `opencode-ducksay@<version>`.
+
+## `swimSpeed`
+
+How fast the duck swims, in columns per second. The sidebar lane is about 29 columns wide, so the default of `12` takes
+roughly 2.4 seconds to cross it.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "swimSpeed": 24 } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | `12` columns per second |
+| `0` | The duck never moves, and the plugin runs no timer for it |
+| `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
+| a number written as a string, `"24"` | Read as the same number |
+| anything else — a negative number, a word, an empty value | Falls back to `12` |
+
+A number without quotes is the normal way to write it. Quotes are accepted, because they are a common slip and silently
+swapping a requested `24` for the default would be worse than reading what was written. An empty value is treated as "not
+set" rather than as `0`, so a blank field cannot quietly freeze the duck.
+
+Variable substitution does **not** apply to `cli.json`: `"{env:DUCK_SPEED}"` reaches the plugin as that literal text, which
+is not a number, so the default is used. To keep a value in one place, put it in the file rather than referencing a
+variable.
+
+Two things to know:
+
+- The option is read while the plugin loads, so OpenCode has to be restarted after changing it.
+- `{"plugins": ["opencode-ducksay"]}` stays valid — you only need the object form to pass options.
+
+OpenCode has its own global `animations` setting in `cli.json`, which turns off interface animations. Plugins cannot read
+it, so it does not affect the duck: `swimSpeed: 0` is the switch for the plugin's own animation.
 
 ## Disabling the plugin
 
