@@ -16,6 +16,10 @@
   `CHANGELOG.md`, that file's `[X.Y.Z]: …/releases/tag/vX.Y.Z` link, and any documentation naming a version outright. A
   changelog advertising a version npm does not have is a release defect, not a typo, and the drift stays invisible until
   somebody installs that version. Check every place before ticking the documentation task off.
+- **Write `CHANGELOG.md` and the READMEs from the user's side.** What changed in behaviour, what became configurable, what
+  stopped working. Implementation detail — function and module names, how an algorithm works, how the art is mirrored, which
+  host events are watched — belongs in `design.md`, not in a document a user reads. The test: if a line cannot be checked
+  without opening the source, it is not a description for the user.
 
 ### Where these rules live
 
