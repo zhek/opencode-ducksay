@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { render, testRender } from "@opentui/solid"
-import { createTestRenderer, ManualClock } from "@opentui/core/testing"
+import { createTestRenderer, ManualClock, type TestRendererSetup } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { Data } from "@opencode/plugin/tui/context"
 import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
 import { Ducksay, type DuckSprites } from "../src/tui.tsx"
 
 /** The session the mounted panel belongs to. */
@@ -58,6 +59,8 @@ interface Harness {
   readonly setRunning: (value: boolean) => void
   /** Paints one frame and returns it. */
   readonly frame: () => Promise<string>
+  /** The same frame with colours, for checking what a row was drawn in. */
+  readonly spans: () => ReturnType<TestRendererSetup["captureSpans"]>
   /** Advances the manual clock, paints the single frame it produces, returns it. */
   readonly advance: (ms: number) => Promise<string>
   /** Paints `frames` frames of `msPerFrame` each, returns the last one. */
@@ -139,6 +142,7 @@ async function mount(
 
   return {
     renderer: setup.renderer,
+    spans: () => setup.captureSpans(),
     activeTimers: () => activeTimers,
     liveRequests: () => setup.renderer.liveRequestCount,
     setRunning,
@@ -379,4 +383,160 @@ describe("animation timers", () => {
   // does not run cleanups. The live check covers a hidden sidebar instead; the
   // cleanup path itself is covered by the test above, which tears the timer down
   // through the same `onCleanup`.
+})
+
+describe("water", () => {
+  /** The duck's last art line, which shares a row with the upper water row. */
+  const LAST_ART = DUCK_RIGHT[DUCK_RIGHT.length - 1].trimEnd()
+
+  const rows = (frame: string) => frame.split("\n")
+
+  /** Indexes of the rows carrying a tilde, which is every water row and nothing else. */
+  const waterIndexes = (frame: string) =>
+    rows(frame).flatMap((row, index) => (row.includes("~") ? [index] : []))
+
+  /** Index of the row that carries the duck's last art line and the upper water row. */
+  const sharedIndex = (frame: string) =>
+    rows(frame).findIndex((row) => row.includes(LAST_ART))
+
+  /** The lower water row, which holds no art and so is pure pattern. */
+  const openWater = (frame: string) => rows(frame)[sharedIndex(frame) + 1] ?? ""
+
+  /** Same row padded out, so two frames can be compared column by column. */
+  const padded = (row: string) => row.padEnd(PANEL_WIDTH)
+
+  /**
+   * How far the pattern travelled between two water rows, or -1 when the new
+   * row is not the old one shifted. The pattern only ever translates, so this
+   * catches a wrong direction as well as a pattern that changed shape.
+   */
+  const shiftOf = (before: string, after: string) => {
+    const from = padded(before)
+    const to = padded(after)
+    for (let shift = 0; shift < WAVE_PERIOD; shift++) {
+      if (from.slice(shift) === to.slice(0, PANEL_WIDTH - shift)) return shift
+    }
+    return -1
+  }
+
+  test("draws two rows of water, the upper one shared with the duck", async () => {
+    const harness = await mount()
+    const captured = await harness.frame()
+    await harness.dispose()
+
+    const shared = sharedIndex(captured)
+    expect(shared).toBeGreaterThanOrEqual(0)
+    // The upper water row shares a row with the duck's last art line and the
+    // second row sits directly under it. Nothing else in the section carries a
+    // tilde, so this also pins down that neither row wrapped onto another.
+    expect(waterIndexes(captured)).toEqual([shared, shared + 1])
+  })
+
+  test("keeps the duck in the columns it occupies", async () => {
+    const harness = await mount()
+    const captured = await harness.frame()
+    await harness.dispose()
+
+    const shared = rows(captured)[sharedIndex(captured)]
+    const at = shared.indexOf(LAST_ART)
+    // The duck is drawn over the water, the spaces inside its art included, so
+    // its own cells never read as water.
+    expect(shared.slice(at, at + LAST_ART.length)).toBe(LAST_ART)
+    expect(shared.slice(at, at + LAST_ART.length)).not.toContain("~")
+  })
+
+  test("puts the duck's last line at the duck's own column, away from the edge", async () => {
+    // Regression, found on a live TUI: the shared row was handed an art line
+    // that already carried its indent, so it got shifted by the duck's column a
+    // second time and walked off the row. At the left edge the indent is empty,
+    // so the bug hid behind the resting pose and every rest-state check passed.
+    const harness = await mount({ running: true })
+    await harness.advance(COLUMN_MS * 6)
+    const captured = await harness.frame()
+    await harness.dispose()
+
+    const column = columnOf(captured)
+    expect(column).toBeGreaterThan(0)
+    expect(rows(captured)[sharedIndex(captured)].indexOf(LAST_ART)).toBe(column)
+  })
+
+  test("draws the water in the same colour as the art", async () => {
+    const harness = await mount()
+    await harness.frame()
+    const captured = harness.spans()
+    await harness.dispose()
+
+    const colourOf = (needle: string) => {
+      for (const line of captured.lines) {
+        for (const span of line.spans) {
+          if (span.text.includes(needle)) return span.fg
+        }
+      }
+      return undefined
+    }
+    const art = colourOf(LAST_ART)
+    const water = colourOf("~")
+    expect(art).toBeDefined()
+    expect(water).toBeDefined()
+    expect(water!.equals(art!)).toBe(true)
+  })
+
+  test("travels with the duck, always in one direction", async () => {
+    const harness = await mount({ running: true })
+    const before = openWater(await harness.frame())
+    await harness.advance(1000)
+    const after = openWater(await harness.frame())
+    await harness.dispose()
+
+    // A second of clock is a second of swimming, and `advance` steps the clock a
+    // tick at a time, so the tempo the section derives is what is under test:
+    // one period per crossing, whatever the lane width.
+    const ticks = Math.ceil(1000 / TICK_MS)
+    const expected = Math.floor(waveSpeed(12, RIGHT_EDGE) * ticks * (TICK_MS / 1000))
+    const shift = shiftOf(before, after)
+    expect(shift).toBe(expected)
+    expect(shift).toBeGreaterThan(0)
+  })
+
+  test("stands still at rest", async () => {
+    const harness = await mount()
+    const before = await harness.frame()
+    await harness.tick(6)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(shiftOf(openWater(before), openWater(after))).toBe(0)
+    expect(harness.activeTimers()).toBe(0)
+  })
+
+  test("stands still at zero speed, with no timer at all", async () => {
+    const harness = await mount({ swimSpeed: 0 })
+    const before = await harness.frame()
+    await harness.tick(6)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(shiftOf(openWater(before), openWater(after))).toBe(0)
+    expect(harness.activeTimers()).toBe(0)
+    // The water belongs to the section whether or not it moves: a frozen duck
+    // still sits in the water.
+    expect(waterIndexes(after)).toHaveLength(2)
+  })
+
+  test("stands still in a lane narrower than the art", async () => {
+    // The duck is pinned to the left edge, so a crossing takes no time and the
+    // derived tempo would divide by zero. The art is also clipped here, which is
+    // why the duck is placed by its visible bottom line rather than by the body
+    // line `columnOf` looks for.
+    // Seven columns is still narrower than the eight the art needs, and still wide
+    // enough for its last line to be drawn whole, which is what places the duck.
+    const harness = await mount({ width: 7, running: true })
+    const before = await harness.frame()
+    await harness.tick(6)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(shiftOf(openWater(before), openWater(after))).toBe(0)
+    expect(rows(after)[sharedIndex(after)].indexOf(LAST_ART)).toBe(0)
+  })
 })

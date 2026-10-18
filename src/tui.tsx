@@ -5,6 +5,7 @@ import { createEffect, createSignal, onCleanup } from "solid-js/dist/solid.js"
 import { DUCK_LEFT, DUCK_RIGHT } from "./duck.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveSwimSpeed } from "./options.ts"
+import { WAVE_PERIOD, WATER_ROW_COUNT, hasTilde, waveSpeed } from "./wave.ts"
 
 /**
  * What the duck is doing. `rest` is the only state that holds no timer, and it
@@ -40,6 +41,12 @@ const defaultSchedule: Schedule = (tick, ms) => {
  * machine waking up from suspend — instead of teleporting the duck.
  */
 const MAX_COLUMNS_PER_TICK = 8
+
+/**
+ * Columns of water generated per row. Wider than any sidebar, and cut at the
+ * lane's edge by `wrapMode="none"`, so the row never has to be measured.
+ */
+const WATER_WIDTH = 160
 
 /**
  * The `Ducksay` section of the session sidebar.
@@ -79,6 +86,7 @@ export function Ducksay(props: {
   let column = 0
   let direction: Direction = 1
   let laneBox: BoxRenderable | undefined
+  let wavePhase = 0
   const lines: (TextRenderable | undefined)[] = []
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
@@ -87,6 +95,9 @@ export function Ducksay(props: {
     const { right, left } = sprites()
     return Math.max(0, ...right.map((line) => line.length), ...left.map((line) => line.length))
   }
+
+  /** How many rows of art there are, which is also where the water starts. */
+  const artRows = () => sprites().right.length
 
   /**
    * The box the section is laid out in. It is measured rather than derived from
@@ -107,12 +118,58 @@ export function Ducksay(props: {
     direction = column * 2 <= reach ? 1 : -1
   }
 
-  /** Draws the current sprite at the current column. */
+  /**
+   * One row of water.
+   *
+   * Generated wider than any sidebar and let `wrapMode="none"` cut it at the
+   * lane's edge, rather than measured. Measuring would mean reading the lane
+   * box, and the row has to be drawable before that box has a width — the refs
+   * that assign it run after the refs of the rows inside it — so a measured
+   * row would paint itself empty once and never again in `rest`, where no tick
+   * follows to correct it.
+   */
+  const waterLine = (row: number) => {
+    let line = ""
+    for (let cell = 0; cell < WATER_WIDTH; cell++) line += hasTilde(cell, wavePhase, row) ? "~" : " "
+    return line
+  }
+
+  /**
+   * Lays the duck's part of a row over the water that shares it.
+   *
+   * The art goes in at the duck's column, so it is given without the indent —
+   * passing an already indented sprite would shift it by `column` a second time
+   * and push it off the row entirely once the duck left the left edge.
+   */
+  const overWater = (water: string, sprite: string) =>
+    water.slice(0, column) + sprite + water.slice(column + sprite.length)
+
+  /**
+   * Draws the current sprite at the current column, with the water under it.
+   *
+   * The upper water row shares a row with the duck's last art line: that is what
+   * puts the duck in the water rather than above it, and it costs no blank row.
+   * The duck is drawn last so its glyphs win the columns it occupies, including
+   * the spaces inside its art.
+   */
   const paint = () => {
     const sprite = art()
     const indent = " ".repeat(column)
+    const rows = artRows()
     for (const [index, text] of lines.entries()) {
-      if (text !== undefined) text.content = indent + (sprite[index] ?? "")
+      if (text === undefined) continue
+      // The last art row is the shared one: the duck's bottom line and the
+      // upper water row occupy it together, which is what puts the duck in the
+      // water rather than on top of it.
+      if (index === rows - 1) {
+        text.content = overWater(waterLine(0), sprite[rows - 1] ?? "")
+        continue
+      }
+      if (index < rows - 1) {
+        text.content = indent + (sprite[index] ?? "")
+        continue
+      }
+      text.content = waterLine(index - rows + 1)
     }
   }
 
@@ -182,6 +239,15 @@ export function Ducksay(props: {
       // flight still runs, and nothing should happen to a resting duck.
       if (mode() === "rest") return
 
+      // The water rides the duck's tick, one phase step per tick, at the tempo
+      // derived from the swim speed. `waveSpeed` is zero both when the speed is
+      // off and when the lane is narrower than the art, so the pattern stands
+      // still exactly when the duck does: no second timer, and no second piece
+      // of state that could drift out of step with the first. The phase is kept
+      // inside one period, because the pattern repeats there and a float that
+      // grows all session loses precision for nothing.
+      wavePhase = (wavePhase + waveSpeed(swimSpeed, limit()) * (TICK_MS / 1000)) % WAVE_PERIOD
+
       const reach = limit()
       if (reach === 0) {
         // A lane narrower than the art has no room to swim in. Sitting at the
@@ -228,7 +294,10 @@ export function Ducksay(props: {
     onCleanup(stop)
   })
 
-  const lineCount = (props.sprites ?? DEFAULT_SPRITES).right.length
+  // One row of art per sprite line, plus one row per water row, minus the row
+  // they share: the water's upper row carries the duck's last art line, so a
+  // blank row between duck and water would only push the duck up off the water.
+  const lineCount = (props.sprites ?? DEFAULT_SPRITES).right.length + WATER_ROW_COUNT - 1
 
   return (
     <box flexGrow={1} flexDirection="column" alignItems="flex-start" ref={(box) => (laneBox = box)}>
