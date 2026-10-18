@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0] — 2026-10-18
+
+The duck now swims on water.
+
+### Added
+
+- Two rows of water under the duck. The lower line of the drawing shares a row with the first line of water, so the duck is
+  in the water rather than above it, and the second line runs underneath.
+- The water travels while the session is working, at a tempo taken from `swimSpeed` — one full pass per trip across the
+  sidebar.
+
+### Changed
+
+- The section is one line taller.
+- `swimSpeed: 0` now also stops the water, not just the duck. The water still appears; it simply stands still.
+- `swimSpeed` sets the tempo of the water as well as the speed of the duck, so a slow `swimSpeed` gives slow water.
+
 ## [1.1.0] — 2026-10-17
 
 The duck swims while a session is working.
@@ -23,5 +40,6 @@ First release. CLI/TUI-only plugin: no server entrypoint.
 
 - A `Ducksay` section with a static ASCII duck in the session sidebar, below the built-in sections.
 
+[1.2.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.2.0
 [1.1.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.1.0
 [1.0.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.0.0

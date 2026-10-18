@@ -24,6 +24,10 @@ Restart OpenCode after editing the file. Entry forms accepted by OpenCode for a 
 How fast the duck swims, in columns per second. The sidebar lane is about 29 columns wide, so the default of `12` takes
 roughly 2.4 seconds to cross it.
 
+The same number sets the tempo of the water: the pattern travels at a rate that completes one whole pass for each trip
+across the sidebar. There is no separate option for the water, so `swimSpeed` is the only thing that controls how the
+section animates.
+
 ```json
 {
   "plugins": [{ "package": "opencode-ducksay", "options": { "swimSpeed": 24 } }]
@@ -33,7 +37,7 @@ roughly 2.4 seconds to cross it.
 | Value | Result |
 | --- | --- |
 | not set | `12` columns per second |
-| `0` | The duck never moves, and the plugin runs no timer for it |
+| `0` | The duck never moves, the water never travels, and the plugin runs no timer at all |
 | `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
 | a number written as a string, `"24"` | Read as the same number |
 | anything else — a negative number, a word, an empty value | Falls back to `12` |
@@ -41,6 +45,10 @@ roughly 2.4 seconds to cross it.
 A number without quotes is the normal way to write it. Quotes are accepted, because they are a common slip and silently
 swapping a requested `24` for the default would be worse than reading what was written. An empty value is treated as "not
 set" rather than as `0`, so a blank field cannot quietly freeze the duck.
+
+A small speed makes the water slow as well as the duck, which at `1` means both barely move for the half-minute a crossing
+takes. The water also stops when the sidebar is narrower than the duck's drawing, because then the duck has nowhere to
+swim and the water has no crossing to pace itself against.
 
 Variable substitution does **not** apply to `cli.json`: `"{env:DUCK_SPEED}"` reaches the plugin as that literal text, which
 is not a number, so the default is used. To keep a value in one place, put it in the file rather than referencing a

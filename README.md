@@ -1,13 +1,14 @@
 # OpenCode Ducksay
 
-An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side while a
-session is working.
+An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side on the
+water while a session is working.
 
 ```text
 Ducksay
-  __
-<(o )___
- ( ._> /
+    __
+___( o)>
+\ <_. )  ~~~~     ~~~~     ~~~~     ~~~~
+     ~~~~     ~~~~     ~~~~     ~~~~     ~
 ```
 
 The plugin adds one section below OpenCode's own `Context` and `MCP` sections.
@@ -35,7 +36,18 @@ The duck swims for as long as the session is working — not only while text arr
 prompts and retries. When the turn ends it swims on to the edge of the sidebar, turns around, and stops there nose towards
 the middle. At rest it always stands at an edge, on the left one when the plugin starts.
 
-`swimSpeed` sets how fast it swims, in columns per second:
+## The water
+
+The duck is in the water, not above it: the lower line of the drawing shares a row with the first line of the water, and a
+second line runs underneath. The water is drawn as clusters of four tildes with a gap of five columns between them, and the
+two lines are offset so their clusters do not line up.
+
+While the session is working the water travels in one direction, at a tempo taken from `swimSpeed` — one full pattern per
+trip across the sidebar. When the turn ends the water stops where it is, which is the one sign that says the session is
+done: a duck parked at an edge means either the turn ended or it happens to be at an edge, but water that has come to a
+stop means one thing only.
+
+`swimSpeed` sets how fast both the duck and the water move, in columns per second:
 
 ```json
 {
@@ -43,7 +55,7 @@ the middle. At rest it always stands at an edge, on the left one when the plugin
 }
 ```
 
-The default is `12`. Set it to `0` for a duck that never moves.
+The default is `12`. Set it to `0` for a duck that never moves and water that never travels.
 
 ## Development
 
