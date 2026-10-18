@@ -84,21 +84,35 @@ To remove it entirely, delete the entry and restart. No project state is written
 
 ## `session.sidebar`
 
-This is an OpenCode setting, not one of the plugin's. It controls the sidebar the duck is drawn in.
+This is an OpenCode setting, not one of the plugin's. It controls the sidebar the duck is drawn in, and it belongs in
+`~/.config/opencode/cli.json` under the `session` key:
+
+```json
+{
+  "session": { "sidebar": "auto" }
+}
+```
+
+It does not go in `opencode.json`, which has no `session` key at all: a key that file does not know has no effect, and
+nothing reports it. The plugin's own options live in the same `cli.json` and are listed above.
 
 | Value | Result |
 | --- | --- |
-| `"auto"` (default) | The sidebar is shown when the terminal is wide enough. The duck appears with it. |
+| `"auto"` (default) | The sidebar is shown when there is room for it. The duck appears with it. |
 | `"hide"` | The sidebar is not rendered. The duck does not appear at all. |
 
-The sidebar can also be closed with `Escape` for the current screen.
+No value forces the sidebar on, so `"auto"` still only shows it when the terminal is wide enough — see the next section.
+
+OpenCode also exposes `session.sidebar.toggle` as a configurable keybind, in the same file under `keybinds`. Its default is
+not declared in OpenCode's published configuration schema, and `Escape` does not toggle the sidebar on 2.0.17.
 
 ## When the section is absent
 
 The duck shows up only where OpenCode shows the sidebar:
 
 - on the session screen — it does not appear on the home screen;
-- when the terminal is wide enough for a 42-column sidebar;
+- when the terminal is wide enough for the sidebar to appear at all. The exact floor is OpenCode's business and moves
+  between versions; measured on 2.0.17 it is 121 columns, and 120 or fewer gets no sidebar and no message saying why.
 - while the sidebar's scroll position has not moved past it.
 
 ## Local development
