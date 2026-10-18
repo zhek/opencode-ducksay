@@ -7,15 +7,25 @@
 - **All code must be covered by automated tests.** New functionality and bug fixes always get one — a bug-fix test must
   reproduce the original defect (fails before the fix, passes after). An implementation task without tests is not done.
 - **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests, and update the project
-  documentation (`README.md`, `README.ru.md`, `CHANGELOG.md`, config/options reference). Documentation is part of the task,
-  not a follow-up.
+  documentation (`README.md`, `README.ru.md`, the `## Unreleased` section of `CHANGELOG.md`, config/options reference).
+  Documentation is part of the task, not a follow-up. The documentation task never bumps the version.
 - **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**. `README.ru.md` is
   maintained in parallel with `README.md` and must change in the same task. Code, identifiers, and file names are always
   English.
-- **A version bump lands everywhere in the same task.** `version` in `package.json`, the new `## [X.Y.Z] — date` heading in
-  `CHANGELOG.md`, that file's `[X.Y.Z]: …/releases/tag/vX.Y.Z` link, and any documentation naming a version outright. A
-  changelog advertising a version npm does not have is a release defect, not a typo, and the drift stays invisible until
-  somebody installs that version. Check every place before ticking the documentation task off.
+- **Changelog first, versions later.** An ordinary PR never touches the version. A user-visible change is added to
+  `CHANGELOG.md` under `## Unreleased` at the top of the file, under the same subheadings a released entry uses:
+  `### Added`, `### Changed`, `### Fixed`, `### Removed`. Such a PR creates no `## [X.Y.Z]` heading, adds no release link,
+  and leaves `version` in `package.json` alone. The `## Unreleased` section is created by the first PR with something to
+  put in it. A change with nothing for the user to notice — `chore`, `docs`, `refactor`, test work — does not touch the
+  changelog at all.
+- **Only a PR from `chore/release-<version>` moves a version**, and it moves every trace of it in one commit: `## Unreleased`
+  becomes `## [X.Y.Z] — date` with that day's date, `[X.Y.Z]: …/releases/tag/vX.Y.Z` is appended, and `version` in
+  `package.json` becomes X.Y.Z. A feature raises the minor, a fix the patch. It is not a change, so it carries no OpenSpec
+  artifacts. The prefix is plain `chore` — `release-<version>` is only a slug — and the commit is `chore: release <version>`.
+  There is no `release` commit type in this project, and there is no need for one: squash-merge turns the PR title into the
+  commit on `main`, so a type from the convention beats a prettier word. The branch name is the only marker: this project has
+  no GitHub labels, and a rule that names one cannot be checked from the files. Anything a release PR leaves behind in
+  `Unreleased` silently ships with the next release, which is the cost of a partial release PR.
 - **Write `CHANGELOG.md` and the READMEs from the user's side.** What changed in behaviour, what became configurable, what
   stopped working. Implementation detail — function and module names, how an algorithm works, how the art is mirrored, which
   host events are watched — belongs in `design.md`, not in a document a user reads. The test: if a line cannot be checked
