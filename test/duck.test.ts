@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 
 /**
  * `SESSION_SIDEBAR_WIDTH` (42) minus `paddingLeft`/`paddingRight` (2 each) and
@@ -9,7 +9,12 @@ import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
  */
 const PANEL_CONTENT_WIDTH = 37
 
-const SPRITES = { left: DUCK_LEFT, right: DUCK_RIGHT } as const
+const SPRITES = {
+  left: DUCK_LEFT,
+  right: DUCK_RIGHT,
+  leftOpen: DUCK_LEFT_OPEN,
+  rightOpen: DUCK_RIGHT_OPEN,
+} as const
 
 /** Glyphs that do not look like themselves after a horizontal flip. */
 const MIRRORED_GLYPHS: Record<string, string> = { "<": ">", ">": "<", "(": ")", ")": "(", "/": "\\", "\\": "/" }
@@ -67,6 +72,26 @@ describe("duck sprites", () => {
     // duck would drift towards one shape over repeated laps.
     const mirrored: string[] = DUCK_RIGHT.map(mirrorLine)
     expect(mirrored).toEqual([...DUCK_LEFT])
+  })
+
+  test("the open right sprite is the mirror of the open left one", () => {
+    const expected: string[] = DUCK_LEFT_OPEN.map(mirrorLine)
+    const actual: string[] = [...DUCK_RIGHT_OPEN]
+    expect(actual).toEqual(expected)
+  })
+
+  test("mirroring the open sprite twice returns the original", () => {
+    const mirrored: string[] = DUCK_RIGHT_OPEN.map(mirrorLine)
+    expect(mirrored).toEqual([...DUCK_LEFT_OPEN])
+  })
+
+  test("the open sprites differ from the closed ones only in the middle line", () => {
+    // The beak is the only part that opens; the head and the body stay the same
+    // lines, so showing the open sprite cannot shift the duck's outline.
+    expect([DUCK_LEFT[0], DUCK_LEFT[2]]).toEqual([DUCK_LEFT_OPEN[0], DUCK_LEFT_OPEN[2]])
+    expect([DUCK_RIGHT[0], DUCK_RIGHT[2]]).toEqual([DUCK_RIGHT_OPEN[0], DUCK_RIGHT_OPEN[2]])
+    expect(DUCK_LEFT_OPEN[1]).not.toBe(DUCK_LEFT[1])
+    expect(DUCK_RIGHT_OPEN[1]).not.toBe(DUCK_RIGHT[1])
   })
 
   test("the sprites face opposite directions", () => {

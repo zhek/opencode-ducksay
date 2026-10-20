@@ -1,15 +1,23 @@
 # OpenCode Ducksay
 
 An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side on the
-water while a session is working.
+water while a session is working. When the turn ends it comes to rest and says `Quack-quack!` in a speech bubble.
 
 ```text
 Ducksay
-    __
-___( o)>
-\ <_. )  ~~~~     ~~~~     ~~~~     ~~~~
-     ~~~~     ~~~~     ~~~~     ~~~~     ~
+
+
+
+        ╭───────────────────────────╮
+        │ Quack-quack!              │
+    __  ╰───────────────────────────╯
+___( o)< ╯
+\ <_. )  ~~~~     ~~~~     ~~~~     ~
+     ~~~~     ~~~~     ~~~~     ~~~~
 ```
+
+The section is always ten lines tall: the heading, five rows reserved for the bubble, three rows of duck and the lower
+water line. The reserve stays empty while the bubble is hidden, so the duck keeps the same rows throughout.
 
 The plugin adds one section below OpenCode's own `Context` and `MCP` sections.
 
@@ -35,6 +43,21 @@ Prefix the entry with `-` to disable the plugin. See [configuration and options]
 The duck swims for as long as the session is working — not only while text arrives, but through tool calls, permission
 prompts and retries. When the turn ends it swims on to the edge of the sidebar, turns around, and stops there nose towards
 the middle. At rest it always stands at an edge, on the left one when the plugin starts.
+
+## Rest
+
+After the duck has swum at least once, every stop ends with a speech bubble at its beak: `Quack-quack!`, with the beak
+open. The bubble stands on the side the duck faces — to the right of a duck at the left edge, to the left of a duck at
+the right edge — and its tail points at the beak from one column away. It stays for the whole rest and disappears as
+soon as the duck swims again, closing the beak with it. The very first rest, right after the plugin starts, has no
+bubble.
+
+The bubble is 29 columns wide with a 25-column text field. Text wraps by word into at most five lines; a word longer
+than the field is broken, and text that does not fit ends with `…`. The message is fixed: the capacity is there for a
+longer line later, not as an option now.
+
+With the default `swimSpeed` the duck always swims before it rests. At `swimSpeed: 0` it never moves, so no bubble
+appears.
 
 ## The water
 

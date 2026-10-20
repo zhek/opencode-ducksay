@@ -2,10 +2,18 @@ import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
 import { createEffect, createSignal, onCleanup } from "solid-js/dist/solid.js"
-import { DUCK_LEFT, DUCK_RIGHT } from "./duck.ts"
+import {
+  BUBBLE_CONTENT_ROWS,
+  BUBBLE_MAX_LINES,
+  BUBBLE_WIDTH,
+  bubbleRows,
+  wrapBubbleText,
+  type BubbleSide,
+} from "./bubble.ts"
+import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveSwimSpeed } from "./options.ts"
-import { WAVE_PERIOD, WATER_ROW_COUNT, hasTilde, waveSpeed } from "./wave.ts"
+import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
 
 /**
  * What the duck is doing. `rest` is the only state that holds no timer, and it
@@ -17,9 +25,16 @@ type Mode = "rest" | "swim" | "dock"
 export interface DuckSprites {
   readonly right: readonly string[]
   readonly left: readonly string[]
+  readonly rightOpen: readonly string[]
+  readonly leftOpen: readonly string[]
 }
 
-const DEFAULT_SPRITES: DuckSprites = { right: DUCK_RIGHT, left: DUCK_LEFT }
+const DEFAULT_SPRITES: DuckSprites = {
+  right: DUCK_RIGHT,
+  left: DUCK_LEFT,
+  rightOpen: DUCK_RIGHT_OPEN,
+  leftOpen: DUCK_LEFT_OPEN,
+}
 
 /** Roughly the frame rate the TUI runs at, in milliseconds. */
 const TICK_MS = 33
@@ -48,6 +63,21 @@ const MAX_COLUMNS_PER_TICK = 8
  */
 const WATER_WIDTH = 160
 
+/** The message the duck shows at rest; tests may override it through `bubbleText`. */
+const DEFAULT_BUBBLE_TEXT = "Quack-quack!"
+
+/**
+ * Where the duck's three art lines sit inside the section, top to bottom.
+ *
+ * The five rows above are the bubble's reserve, so the duck stays on the same
+ * rows whether or not the bubble is showing. The upper water line shares the
+ * body row, and the lower water line gets its own row.
+ */
+const HEAD_ROW = BUBBLE_MAX_LINES
+const BEAK_ROW = HEAD_ROW + 1
+const BODY_ROW = HEAD_ROW + 2
+const LOWER_WATER_ROW = HEAD_ROW + 3
+
 /**
  * The `Ducksay` section of the session sidebar.
  *
@@ -57,7 +87,8 @@ const WATER_WIDTH = 160
  * its claims out in a row, which would otherwise run the heading and all three
  * art lines together into one line of text.
  *
- * The three art lines are rendered as empty `<text>` elements and filled
+ * The nine content rows — five of reserve above the duck, its three art lines
+ * and the lower water line — are rendered as empty `<text>` elements and filled
  * imperatively. OpenCode transpiles plugin sources with Bun, whose JSX transform
  * is not Solid-aware: `content={line()}` would be evaluated once, at creation,
  * and the duck would never move. Effects and signals are unaffected — those are
@@ -79,6 +110,8 @@ export function Ducksay(props: {
   isRunning?: () => boolean
   schedule?: Schedule
   sprites?: DuckSprites
+  /** The rest bubble's message; tests change it, the plugin never does. */
+  bubbleText?: string
 }) {
   const [mode, setMode] = createSignal<Mode>("rest")
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
@@ -87,17 +120,30 @@ export function Ducksay(props: {
   let direction: Direction = 1
   let laneBox: BoxRenderable | undefined
   let wavePhase = 0
+  let hasSwum = false
   const lines: (TextRenderable | undefined)[] = []
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
-  const art = () => (direction === 1 ? sprites().right : sprites().left)
-  const artWidth = () => {
-    const { right, left } = sprites()
-    return Math.max(0, ...right.map((line) => line.length), ...left.map((line) => line.length))
+  /**
+   * The bubble is shown only after the duck has actually swum: the start-up
+   * pose is a rest too, and the user asked for no bubble before the first lap.
+   */
+  const bubbleVisible = () => mode() === "rest" && hasSwum
+  const art = () => {
+    const set = sprites()
+    if (direction === 1) return bubbleVisible() ? set.rightOpen : set.right
+    return bubbleVisible() ? set.leftOpen : set.left
   }
-
-  /** How many rows of art there are, which is also where the water starts. */
-  const artRows = () => sprites().right.length
+  const artWidth = () => {
+    const { right, left, rightOpen, leftOpen } = sprites()
+    return Math.max(
+      0,
+      ...right.map((line) => line.length),
+      ...left.map((line) => line.length),
+      ...rightOpen.map((line) => line.length),
+      ...leftOpen.map((line) => line.length),
+    )
+  }
 
   /**
    * The box the section is laid out in. It is measured rather than derived from
@@ -145,31 +191,55 @@ export function Ducksay(props: {
     water.slice(0, column) + sprite + water.slice(column + sprite.length)
 
   /**
-   * Draws the current sprite at the current column, with the water under it.
+   * Puts a bubble segment on `row` at column `at`.
+   *
+   * A segment that starts left of the lane is cut at its left edge, the same
+   * way the art and water rows are cut by `wrapMode="none"`; the rest of the
+   * row, including the duck, is left alone.
+   */
+  const overlay = (row: string, segment: string, at: number) => {
+    if (at < 0) {
+      const visible = segment.slice(-at)
+      return visible + row.slice(visible.length)
+    }
+    const padded = row.padEnd(at + segment.length, " ")
+    return padded.slice(0, at) + segment + padded.slice(at + segment.length)
+  }
+
+  /**
+   * Draws the current sprite at the current column, with the water under it,
+   * and lays the bubble over the rows beside the duck when it is showing.
    *
    * The upper water row shares a row with the duck's last art line: that is what
    * puts the duck in the water rather than above it, and it costs no blank row.
-   * The duck is drawn last so its glyphs win the columns it occupies, including
-   * the spaces inside its art.
+   * The duck is drawn first so its glyphs win the columns it occupies, including
+   * the spaces inside its art. The bubble never overlaps it: 29 columns of
+   * bubble plus 8 of art is the 37-column lane, so the two sit side by side.
    */
   const paint = () => {
     const sprite = art()
     const indent = " ".repeat(column)
-    const rows = artRows()
+    // Every row is rebuilt on every paint, which is also what clears a bubble
+    // that has just gone away; the reserve above the duck stays blank otherwise.
+    const rows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
+    rows[HEAD_ROW] = indent + (sprite[0] ?? "")
+    rows[BEAK_ROW] = indent + (sprite[1] ?? "")
+    rows[BODY_ROW] = overWater(waterLine(0), sprite[2] ?? "")
+    rows[LOWER_WATER_ROW] = waterLine(1)
+
+    if (bubbleVisible()) {
+      const side: BubbleSide = direction === 1 ? "right" : "left"
+      // The bubble hugs the beak: to the right of the duck when it faces right,
+      // ending at the duck's column when it faces left.
+      const at = direction === 1 ? column + artWidth() : column - BUBBLE_WIDTH
+      const segments = bubbleRows(wrapBubbleText(props.bubbleText ?? DEFAULT_BUBBLE_TEXT), side)
+      for (const [index, segment] of segments.entries()) {
+        if (segment !== undefined) rows[index] = overlay(rows[index] ?? "", segment, at)
+      }
+    }
+
     for (const [index, text] of lines.entries()) {
-      if (text === undefined) continue
-      // The last art row is the shared one: the duck's bottom line and the
-      // upper water row occupy it together, which is what puts the duck in the
-      // water rather than on top of it.
-      if (index === rows - 1) {
-        text.content = overWater(waterLine(0), sprite[rows - 1] ?? "")
-        continue
-      }
-      if (index < rows - 1) {
-        text.content = indent + (sprite[index] ?? "")
-        continue
-      }
-      text.content = waterLine(index - rows + 1)
+      if (text !== undefined) text.content = rows[index] ?? ""
     }
   }
 
@@ -266,6 +336,7 @@ export function Ducksay(props: {
         accumulated -= interval
         budget -= 1
         const move = moveTowardsEdge(column, direction, reach)
+        if (move.column !== column) hasSwum = true
         column = move.column
         direction = move.direction
         if (move.turned) {
@@ -274,12 +345,14 @@ export function Ducksay(props: {
           // the duck leaves the wall in the same tick it reached it, so the
           // turn is never actually drawn.
           accumulated = 0
-          // A dock ends on the turn, which leaves the duck at a wall.
+          // A dock ends on the turn, which leaves the duck at a wall. The mode
+          // changes before the paint, so the paint already draws the rest pose,
+          // open beak and bubble included.
           if (mode() === "dock") {
             park()
+            setMode("rest")
             paint()
             renderer.requestRender()
-            setMode("rest")
             return
           }
         }
@@ -294,10 +367,10 @@ export function Ducksay(props: {
     onCleanup(stop)
   })
 
-  // One row of art per sprite line, plus one row per water row, minus the row
-  // they share: the water's upper row carries the duck's last art line, so a
-  // blank row between duck and water would only push the duck up off the water.
-  const lineCount = (props.sprites ?? DEFAULT_SPRITES).right.length + WATER_ROW_COUNT - 1
+  // The reserve above the duck, the three art rows and the lower water row.
+  // This never changes with the bubble: the duck must not move when it appears
+  // or goes away, and the sidebar must not jump either.
+  const lineCount = BUBBLE_CONTENT_ROWS
 
   return (
     <box flexGrow={1} flexDirection="column" alignItems="flex-start" ref={(box) => (laneBox = box)}>
