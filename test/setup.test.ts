@@ -3,8 +3,10 @@ import { render } from "@opentui/solid"
 import { ManualClock, createTestRenderer } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
+import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
+import type { JokeClient } from "../src/joke.ts"
 import plugin from "../src/tui.tsx"
 
 /** `SESSION_SIDEBAR_WIDTH` from OpenCode's session sidebar. */
@@ -18,6 +20,44 @@ const COLUMN_MS = 1000 / 12
 
 const SESSION = "ses_duck"
 const OTHER_SESSION = "ses_other"
+const PROJECT = "project-1"
+const MODEL: ModelRef = { providerID: "openai", id: "gpt-5" }
+
+function sessionInfo(overrides: Partial<Record<keyof SessionInfo, unknown>> = {}): SessionInfo {
+  return {
+    id: SESSION,
+    projectID: PROJECT,
+    title: "Fix the parser",
+    model: MODEL,
+    time: { created: 0, updated: 0 },
+    ...overrides,
+  } as unknown as SessionInfo
+}
+
+function projectInfo(): Project {
+  return {
+    id: PROJECT,
+    name: "ducksay",
+    canonical: "/repo",
+    time: { created: 0, updated: 0 },
+    sandboxes: [],
+  } as unknown as Project
+}
+
+function userMessage(text: string, created: number): SessionMessageInfo {
+  return { id: `user-${created}`, type: "user", time: { created }, text } as unknown as SessionMessageInfo
+}
+
+function assistantMessage(text: string, created: number): SessionMessageInfo {
+  return {
+    id: `assistant-${created}`,
+    type: "assistant",
+    time: { created },
+    agent: "build",
+    model: MODEL,
+    content: [{ type: "text", text }],
+  } as unknown as SessionMessageInfo
+}
 
 /**
  * The middle art line, closed and open. All four versions start at column 0, so
@@ -60,7 +100,17 @@ interface Fake {
   readonly statuses: Map<string, "idle" | "running">
 }
 
-function fake(options: { renderer?: CliRenderer; options?: Record<string, unknown> } = {}): Fake {
+function fake(
+  options: {
+    renderer?: CliRenderer
+    options?: Record<string, unknown>
+    session?: SessionInfo
+    messages?: SessionMessageInfo[]
+    project?: Project
+    branch?: string
+    client?: JokeClient
+  } = {},
+): Fake {
   const claims: Record<string, unknown>[] = []
   const handlers = new Map<string, (event: any) => void>()
   const unsubscribes = new Map<string, () => void>()
@@ -70,6 +120,7 @@ function fake(options: { renderer?: CliRenderer; options?: Record<string, unknow
     options: options.options ?? {},
     theme: { text: { base: RGBA.fromHex("#e5e5e5") } },
     renderer: options.renderer,
+    client: options.client,
     data: {
       on: (type: string, handler: (event: any) => void) => {
         handlers.set(type, handler)
@@ -79,6 +130,18 @@ function fake(options: { renderer?: CliRenderer; options?: Record<string, unknow
       },
       session: {
         status: (sessionID: string) => statuses.get(sessionID) ?? "idle",
+        get: (sessionID: string) => (sessionID === SESSION ? options.session : undefined),
+        message: {
+          list: (sessionID: string) => (sessionID === SESSION ? (options.messages ?? []) : []),
+        },
+      },
+      project: {
+        get: (projectID: string) => (projectID === PROJECT ? options.project : undefined),
+      },
+      location: {
+        vcs: {
+          info: () => (options.branch === undefined ? undefined : { branch: { current: options.branch } }),
+        },
       },
     },
     ui: {
@@ -134,12 +197,28 @@ interface Mounted {
 
 /** Mounts the plugin's claim on a manual clock, the way the host renders it. */
 async function mountClaim(
-  options: { options?: Record<string, unknown>; running?: boolean } = {},
+  options: {
+    options?: Record<string, unknown>
+    running?: boolean
+    session?: SessionInfo
+    messages?: SessionMessageInfo[]
+    project?: Project
+    branch?: string
+    client?: JokeClient
+  } = {},
 ): Promise<Mounted> {
   const clock = new ManualClock()
   const setup = await createTestRenderer({ width: PANEL_WIDTH, height: 12, clock })
   const restoreTimers = useClockAsGlobalTimers(clock)
-  const harness = fake({ renderer: setup.renderer, options: options.options })
+  const harness = fake({
+    renderer: setup.renderer,
+    options: options.options,
+    session: options.session,
+    messages: options.messages,
+    project: options.project,
+    branch: options.branch,
+    client: options.client,
+  })
   if (options.running === true) harness.statuses.set(SESSION, "running")
   await plugin.setup(harness.context)
   await render(
@@ -169,6 +248,35 @@ async function mountClaim(
       restoreTimers()
     },
   }
+}
+
+interface DeferredCall {
+  readonly input: { readonly sessionID: string; readonly prompt: string }
+  readonly options?: { readonly signal?: AbortSignal }
+  resolve: (value: { readonly text?: string }) => void
+  reject: (error: Error) => void
+}
+
+/** A model client whose answers the test resolves by hand. */
+function deferredClient() {
+  const calls: DeferredCall[] = []
+  const client: JokeClient = {
+    session: {
+      create: async () => ({ id: "temp-session" }),
+      generate: (input, options) =>
+        new Promise((resolve, reject) => {
+          calls.push({ input, options, resolve, reject })
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        }),
+      remove: async () => {},
+    },
+  }
+  return { client, calls }
+}
+
+/** Lets request promise chains and Solid updates run. */
+async function settle() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve()
 }
 
 describe("setup", () => {
@@ -276,6 +384,177 @@ describe("section behaviour through the plugin", () => {
       mounted.harness.emit("session.execution.started", forSession)
       // The default of 12 columns per second is in effect.
       expect(columnOf(await mounted.swim(10, COLUMN_MS))).toBeGreaterThan(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+})
+describe("generated jokes through the plugin", () => {
+  const history = [
+    userMessage("older question", 1),
+    assistantMessage("older answer", 2),
+    userMessage("newest question", 3),
+    assistantMessage("newest answer", 4),
+  ]
+
+  test("passes the temporary session id, depth and metadata, and waits for the turn to end", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      messages: history,
+      project: projectInfo(),
+      branch: "feat/jokes",
+      client: deferred.client,
+      options: { llmContextDepth: 1, llmTimeout: 5 },
+    })
+
+    try {
+      await mounted.swim(5)
+      expect(deferred.calls).toHaveLength(0)
+
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await settle()
+      expect(deferred.calls).toHaveLength(1)
+
+      const call = deferred.calls[0]!
+      expect(call.input.sessionID).toBe("temp-session")
+      expect(call.input.prompt).toContain("Session: Fix the parser")
+      expect(call.input.prompt).toContain("Project: ducksay")
+      expect(call.input.prompt).toContain("Branch: feat/jokes")
+      expect(call.input.prompt).toContain("User: newest question")
+      expect(call.input.prompt).toContain("Assistant: newest answer")
+      expect(call.input.prompt).not.toContain("older question")
+      expect(call.input.prompt).not.toContain("older answer")
+
+      call.resolve({ text: "Context joke" })
+      await settle()
+      expect(await mounted.swim(RIGHT_EDGE + 6)).toContain("Context joke")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("uses llmTimeout for the model call and falls back when it expires", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      client: deferred.client,
+      options: { llmTimeout: 0.01, llmContextDepth: 1 },
+    })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      await settle()
+
+      expect(deferred.calls[0]!.options?.signal?.aborted).toBe(true)
+      expect(await mounted.frame()).toContain("Quack-quack!")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("falls back when the client fails", async () => {
+    const failing: JokeClient = {
+      session: {
+        create: async () => ({ id: "temp-session" }),
+        generate: async () => {
+          throw new Error("provider is down")
+        },
+        remove: async () => {},
+      },
+    }
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), client: failing })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await settle()
+
+      expect(await mounted.frame()).toContain("Quack-quack!")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("survives a missing client or missing session data", async () => {
+    const cases: Array<{ client?: JokeClient; session?: SessionInfo }> = [
+      { session: sessionInfo() },
+      { client: deferredClient().client },
+    ]
+
+    for (const entry of cases) {
+      const mounted = await mountClaim({ running: true, ...entry })
+      try {
+        await mounted.swim(5)
+        mounted.harness.emit("session.execution.succeeded", forSession)
+        await mounted.swim(RIGHT_EDGE + 6)
+        await settle()
+
+        expect(await mounted.frame()).toContain("Quack-quack!")
+      } finally {
+        await mounted.close()
+      }
+    }
+  })
+
+  test("shows the joke at rest, hides it on the next turn and aborts that turn's pending request", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      messages: history,
+      project: projectInfo(),
+      branch: "feat/jokes",
+      client: deferred.client,
+    })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await settle()
+
+      // The turn is over and the duck is at rest, but the answer is pending.
+      expect(deferred.calls).toHaveLength(1)
+      expect(await mounted.frame()).not.toContain("╭")
+
+      deferred.calls[0]!.resolve({ text: "The parser quacks" })
+      await settle()
+      const shown = await mounted.frame()
+      expect(shown).toContain("The parser quacks")
+      expect(shown).toContain(FACING_LEFT_OPEN)
+
+      // A new turn drops the bubble while the duck swims.
+      mounted.harness.emit("session.execution.started", forSession)
+      await settle()
+      const swimming = await mounted.swim(2)
+      expect(swimming).not.toContain("The parser quacks")
+      expect(swimming).not.toContain("╭")
+
+      // That turn ends and starts a second, pending request.
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await settle()
+      expect(deferred.calls).toHaveLength(2)
+      const second = deferred.calls[1]!
+      expect(second.options?.signal?.aborted).toBe(false)
+      expect(await mounted.frame()).not.toContain("╭")
+
+      // The next turn aborts it, and its late answer never reaches the bubble.
+      mounted.harness.emit("session.execution.started", forSession)
+      await settle()
+      expect(second.options?.signal?.aborted).toBe(true)
+      second.resolve({ text: "late answer" })
+      await settle()
+      const after = await mounted.frame()
+      expect(after).not.toContain("late answer")
+      expect(after).not.toContain("╭")
     } finally {
       await mounted.close()
     }

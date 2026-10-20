@@ -1,7 +1,8 @@
 # OpenCode Ducksay
 
 An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side on the
-water while a session is working. When the turn ends it comes to rest and says `Quack-quack!` in a speech bubble.
+water while a session is working. When the turn ends it comes to rest and says a short joke in a speech bubble, using the
+model of the current session. If no joke arrives, it falls back to `Quack-quack!`.
 
 ```text
 Ducksay
@@ -36,7 +37,8 @@ Add the package to `~/.config/opencode/cli.json`:
 Restart OpenCode afterwards. There is no build step.
 
 Prefix the entry with `-` to disable the plugin. See [configuration and options](docs/configuration.md) for the
-`swimSpeed` option, the `session.sidebar` setting, and the cases where the sidebar is not shown at all.
+`swimSpeed`, `llmTimeout` and `llmContextDepth` options, the `session.sidebar` setting, and the cases where the sidebar is
+not shown at all.
 
 ## Swimming
 
@@ -46,18 +48,31 @@ the middle. At rest it always stands at an edge, on the left one when the plugin
 
 ## Rest
 
-After the duck has swum at least once, every stop ends with a speech bubble at its beak: `Quack-quack!`, with the beak
-open. The bubble stands on the side the duck faces — to the right of a duck at the left edge, to the left of a duck at
-the right edge — and its tail points at the beak from one column away. It stays for the whole rest and disappears as
-soon as the duck swims again, closing the beak with it. The very first rest, right after the plugin starts, has no
-bubble.
+After the duck has swum at least once, every stop ends with a speech bubble at its beak. The duck asks the model of the
+current session for a short joke about the session: the last few messages from you and the assistant, plus the session
+title, project and branch. The request is built from what OpenCode already has locally; tool output, file contents and
+diffs are not sent. The joke is written in the language of your last message, or in the language of the previous messages
+when that one is unclear.
+
+While the joke is on its way, the bubble is hidden and the beak stays closed. When the answer arrives, the bubble appears
+with the joke and the beak opens. If the request fails, comes back empty or takes too long, the duck says `Quack-quack!`
+instead. It does not retry until the next turn. The bubble stands on the side the duck faces — to the right of a duck at
+the left edge, to the left of a duck at the right edge — and its tail points at the beak from one column away. It stays
+for the whole rest and disappears as soon as the duck swims again, closing the beak with it. The very first rest, right
+after the plugin starts, has no bubble.
 
 The bubble is 29 columns wide with a 25-column text field. Text wraps by word into at most five lines; a word longer
-than the field is broken, and text that does not fit ends with `…`. The message is fixed: the capacity is there for a
-longer line later, not as an option now.
+than the field is broken, and text that does not fit ends with `…`. A generated answer is shortened to what the bubble can
+show.
 
-With the default `swimSpeed` the duck always swims before it rests. At `swimSpeed: 0` it never moves, so no bubble
-appears.
+There is no separate on/off switch. `llmTimeout` sets how many seconds the duck waits for the model — twenty-five by default,
+counting only the model's answer; `0`, a blank value or a value that is not a number means twenty-five, and anything above 120
+means 120. `llmContextDepth` sets how many recent messages of each role are read — two by default, a whole number from 1 to
+10; a value above 10 means 10, while `0`, a fraction or a value that is not a number means two. The full tables are in
+[configuration and options](docs/configuration.md).
+
+With the default `swimSpeed` the duck always swims before it rests. At `swimSpeed: 0` it never moves, so no joke is
+requested and no bubble appears; the same is true when the sidebar is narrower than the drawing.
 
 ## The water
 
