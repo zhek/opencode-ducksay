@@ -1,7 +1,15 @@
 # Configuration and options
 
-`opencode-ducksay` has one option, `swimSpeed`, which sets how fast the duck swims across the sidebar. It is optional: with
-nothing configured the duck swims at 12 columns per second.
+`opencode-ducksay` has three options: `swimSpeed`, `llmTimeout` and `llmContextDepth`. All are optional. With nothing
+configured the duck swims at 12 columns per second, waits twenty-five seconds for a joke, and reads two recent messages of each
+role.
+
+At rest the duck asks the model of the current session for a short joke. The request is built locally from recent
+messages, the session title, the project and the branch; tool output, file contents and diffs are not sent. The request
+uses the model selected in the session, or the server's default model when none is selected, and it does not add a message
+to the transcript. While the answer is pending there is no bubble, and if the request fails, returns nothing or times out,
+the duck says `Quack-quack!`. There is no separate on/off switch: `swimSpeed: 0` stops the duck from swimming and therefore
+from asking for a joke at all.
 
 ## Enabling the plugin
 
@@ -37,7 +45,7 @@ section animates.
 | Value | Result |
 | --- | --- |
 | not set | `12` columns per second |
-| `0` | The duck never moves, the water never travels, and the plugin runs no timer at all |
+| `0` | The duck never moves, the water never travels, no timer runs and no joke is requested |
 | `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
 | a number written as a string, `"24"` | Read as the same number |
 | anything else — a negative number, a word, an empty value | Falls back to `12` |
@@ -48,7 +56,52 @@ set" rather than as `0`, so a blank field cannot quietly freeze the duck.
 
 A small speed makes the water slow as well as the duck, which at `1` means both barely move for the half-minute a crossing
 takes. The water also stops when the sidebar is narrower than the duck's drawing, because then the duck has nowhere to
-swim and the water has no crossing to pace itself against.
+swim and the water has no crossing to pace itself against. The duck also does not ask for a joke when it cannot swim.
+
+## `llmTimeout`
+
+How long the duck waits for the joke, in seconds. The timeout starts when the request goes to the model, not while the
+plugin is reading the session locally, so a large context does not eat into the answer time.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "llmTimeout": 10 } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | `25` seconds |
+| a finite positive number | That many seconds |
+| a number written as a string, `"10"` | Read as the same number |
+| `0`, a negative number, a blank value or anything that is not a number | Falls back to `25` seconds |
+| a value above `120` | Capped at `120` seconds |
+
+When the timeout expires, the request is cancelled and the bubble shows `Quack-quack!`. There is no retry until the next
+turn.
+
+## `llmContextDepth`
+
+How many recent messages of each role go into the joke prompt: user messages and assistant replies are counted
+separately, so the default of `2` means two user messages and two assistant replies. The session title, project and branch
+are added whenever they are available, whatever the depth.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "llmContextDepth": 3 } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | `2` messages of each role |
+| a whole number from `1` to `10` | That many messages of each role |
+| a number written as a string, `"3"` | Read as the same number |
+| a value above `10` | Capped at `10` |
+| `0`, a negative number, a fraction, a blank value or anything that is not a number | Falls back to `2` |
+
+Only message text is sent. Reasoning, tool calls, tool output, file contents and diffs are left out. The joke is written in
+the language of the last user message, or in the language of the previous messages when that one is unclear.
 
 Variable substitution does **not** apply to `cli.json`: `"{env:DUCK_SPEED}"` reaches the plugin as that literal text, which
 is not a number, so the default is used. To keep a value in one place, put it in the file rather than referencing a
@@ -56,7 +109,7 @@ variable.
 
 Two things to know:
 
-- The option is read while the plugin loads, so OpenCode has to be restarted after changing it.
+- The options are read while the plugin loads, so OpenCode has to be restarted after changing them.
 - `{"plugins": ["opencode-ducksay"]}` stays valid — you only need the object form to pass options.
 
 OpenCode has its own global `animations` setting in `cli.json`, which turns off interface animations. Plugins cannot read

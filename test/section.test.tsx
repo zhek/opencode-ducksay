@@ -1,10 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { render, testRender } from "@opentui/solid"
+import { createComponent, render, testRender } from "@opentui/solid"
 import { createTestRenderer, ManualClock, type TestRendererSetup } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { Data } from "@opencode/plugin/tui/context"
+import { createSignal, Show } from "solid-js/dist/solid.js"
+
+/**
+ * `Show`'s two overloads are hard to pick through the manual `createComponent`
+ * call below, so the test uses the non-keyed shape explicitly.
+ */
+const Conditional = Show as unknown as (props: {
+  when: boolean
+  keyed?: false
+  children: (shown: boolean) => unknown
+}) => unknown
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
@@ -79,6 +90,8 @@ interface Harness {
   readonly advance: (ms: number) => Promise<string>
   /** Paints `frames` frames of `msPerFrame` each, returns the last one. */
   readonly tick: (frames: number, msPerFrame?: number) => Promise<string>
+  /** Removes the section from the tree, which runs its `onCleanup`. */
+  readonly unmount: () => Promise<void>
   readonly dispose: () => Promise<void>
 }
 
@@ -98,6 +111,7 @@ interface MountOptions {
   swimSpeed?: number
   sprites?: DuckSprites
   bubbleText?: string
+  joke?: (signal: AbortSignal) => Promise<string | undefined>
 }
 
 async function mount(options: MountOptions = {}): Promise<Harness> {
@@ -107,6 +121,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
   let activeTimers = 0
 
   const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
+  const [mounted, setMounted] = createSignal(true)
   await render(
     () => {
       const data = {
@@ -119,26 +134,39 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
         handlers.get("session.execution.started")?.({ data: { sessionID: SESSION } })
         if (!value) handlers.get("session.execution.succeeded")?.({ data: { sessionID: SESSION } })
       }
-      return (
-        <Ducksay
-          primary={PRIMARY}
-          renderer={setup.renderer}
-          swimSpeed={options.swimSpeed ?? 12}
-          data={data}
-          sessionID={SESSION}
-          isRunning={() => options.running === true}
-          schedule={(tick, ms) => {
-            activeTimers += 1
-            const handle = clock.setInterval(tick, ms)
-            return () => {
-              clock.clearInterval(handle)
-              activeTimers -= 1
-            }
-          }}
-          sprites={options.sprites}
-          bubbleText={options.bubbleText}
-        />
-      )
+      // `Show` is created manually because Bun's JSX transform evaluates props
+      // once: a getter is the only way to make the conditional reactive. It
+      // gives the tests a real unmount path, which disposing the renderer does
+      // not run under Bun's server build of Solid.
+      return createComponent(Conditional, {
+        keyed: false,
+        get when() {
+          return mounted()
+        },
+        get children() {
+          return (_shown: boolean) => (
+            <Ducksay
+              primary={PRIMARY}
+              renderer={setup.renderer}
+              swimSpeed={options.swimSpeed ?? 12}
+              data={data}
+              sessionID={SESSION}
+              isRunning={() => options.running === true}
+              schedule={(tick, ms) => {
+                activeTimers += 1
+                const handle = clock.setInterval(tick, ms)
+                return () => {
+                  clock.clearInterval(handle)
+                  activeTimers -= 1
+                }
+              }}
+              sprites={options.sprites}
+              bubbleText={options.bubbleText}
+              joke={options.joke}
+            />
+          )
+        },
+      })
     },
     setup.renderer,
   )
@@ -177,6 +205,10 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
       let captured = ""
       for (let index = 0; index < frames; index += 1) captured = await advance(msPerFrame)
       return captured
+    },
+    unmount: async () => {
+      setMounted(false)
+      await frame()
     },
     dispose: () => setup.dispose(),
   }
@@ -726,6 +758,180 @@ describe("rest bubble", () => {
     expect(rowOf(frame, HEAD)).toBe(headBefore)
     expect(rows[headBefore + 1]).toContain(FACING_LEFT_OPEN)
     expect(rows[headBefore + 2]).toContain(DUCK_LEFT[2].trimEnd())
+    await harness.dispose()
+  })
+})
+
+describe("generated joke", () => {
+  interface PendingJoke {
+    readonly signal: AbortSignal
+    resolve: (value: string | undefined) => void
+    reject: (error: Error) => void
+  }
+
+  function controlledJoke() {
+    const calls: PendingJoke[] = []
+    const joke = (signal: AbortSignal) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        calls.push({ signal, resolve, reject })
+      })
+    return { joke, calls }
+  }
+
+  /** Lets the request promise, the signal update and the repaint effect run. */
+  async function settle() {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  }
+
+  async function dockWithJoke(
+    joke: (signal: AbortSignal) => Promise<string | undefined>,
+    options: MountOptions = {},
+  ) {
+    const harness = await mount({ running: true, joke, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  test("shows no bubble and a closed beak while the joke is pending", async () => {
+    const pending = controlledJoke()
+    const { harness, frame } = await dockWithJoke(pending.joke)
+
+    expect(frame).not.toContain("╭")
+    expect(frame).not.toContain("╰")
+    expect(frame).toContain(FACING_LEFT)
+    expect(frame).not.toContain(FACING_LEFT_OPEN)
+    expect(pending.calls).toHaveLength(1)
+
+    await harness.dispose()
+  })
+
+  test("shows a successful joke and opens the beak", async () => {
+    const { harness } = await dockWithJoke(async () => "The parser quacks back")
+    await settle()
+    const shown = await harness.frame()
+
+    expect(shown).toContain("The parser quacks back")
+    expect(shown).toContain(FACING_LEFT_OPEN)
+    expect(shown).not.toContain(FACING_LEFT)
+    expect(shown).not.toContain("Quack-quack!")
+    await harness.dispose()
+  })
+
+  test("falls back to Quack-quack for an error, an empty answer or a timeout", async () => {
+    const answers = [
+      async () => {
+        throw new Error("provider is down")
+      },
+      async () => "",
+      async () => undefined,
+    ]
+
+    for (const answer of answers) {
+      const { harness } = await dockWithJoke(answer)
+      await settle()
+      const shown = await harness.frame()
+
+      expect(shown).toContain("Quack-quack!")
+      expect(shown).toContain(FACING_LEFT_OPEN)
+      expect(shown).not.toContain(FACING_LEFT)
+      await harness.dispose()
+    }
+  })
+
+  test("does not request a joke before the duck has swum", async () => {
+    let calls = 0
+    const harness = await mount({
+      running: false,
+      joke: async () => {
+        calls += 1
+        return "late"
+      },
+    })
+
+    await harness.frame()
+    await harness.tick(5)
+
+    expect(calls).toBe(0)
+    await harness.dispose()
+  })
+
+  test("does not request a joke when the duck cannot swim", async () => {
+    for (const options of [{ swimSpeed: 0 }, { width: DUCK_WIDTH - 2 }] as const) {
+      let calls = 0
+      const harness = await mount({
+        running: true,
+        ...options,
+        joke: async () => {
+          calls += 1
+          return "late"
+        },
+      })
+      await harness.tick(5)
+      harness.setRunning(false)
+      await harness.tick(RIGHT_EDGE + 2)
+
+      expect(calls).toBe(0)
+      await harness.dispose()
+    }
+  })
+
+  test("asks exactly once per turn, not once more when the duck reaches rest", async () => {
+    const pending = controlledJoke()
+    const { harness } = await dockWithJoke(pending.joke)
+
+    expect(pending.calls).toHaveLength(1)
+    await harness.tick(10)
+    expect(pending.calls).toHaveLength(1)
+
+    pending.calls[0]!.resolve("One joke")
+    await settle()
+    await harness.frame()
+    expect(pending.calls).toHaveLength(1)
+    await harness.dispose()
+  })
+
+  test("a new turn aborts the pending request and ignores its late answer", async () => {
+    const pending = controlledJoke()
+    const { harness } = await dockWithJoke(pending.joke)
+    expect(pending.calls).toHaveLength(1)
+    const first = pending.calls[0]!
+
+    harness.setRunning(true)
+    await settle()
+    expect(first.signal.aborted).toBe(true)
+
+    first.resolve("late joke")
+    await settle()
+    const swimming = await harness.frame()
+    expect(swimming).not.toContain("late joke")
+    expect(swimming).not.toContain("╭")
+
+    harness.setRunning(false)
+    const docked = await harness.tick(RIGHT_EDGE + 2)
+    expect(pending.calls).toHaveLength(2)
+    expect(docked).not.toContain("late joke")
+    expect(docked).not.toContain("╭")
+
+    pending.calls[1]!.resolve("second joke")
+    await settle()
+    const shown = await harness.frame()
+    expect(shown).toContain("second joke")
+    expect(shown).not.toContain("late joke")
+    expect(shown.includes(FACING_LEFT_OPEN) || shown.includes(FACING_RIGHT_OPEN)).toBe(true)
+    expect(shown).not.toContain("Quack-quack!")
+    await harness.dispose()
+  })
+
+  test("unmounting aborts the pending request", async () => {
+    const pending = controlledJoke()
+    const { harness } = await dockWithJoke(pending.joke)
+    const signal = pending.calls[0]!.signal
+
+    expect(signal.aborted).toBe(false)
+    await harness.unmount()
+    expect(signal.aborted).toBe(true)
     await harness.dispose()
   })
 })

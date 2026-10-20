@@ -4,8 +4,16 @@
 
 ### Added
 
-- A speech bubble at the duck's beak when it comes to rest after swimming: `Quack-quack!`, with the beak open. The bubble
-  faces the duck, stays for the whole rest and disappears when the duck swims again.
+- A joke in the rest bubble, written by the current session's model from the last user messages and assistant replies,
+  plus the session title, project and branch. The joke follows the language of your last message.
+- The duck reads only message text locally: tool output, file contents and diffs are not sent. It uses the model selected
+  in the session, or the server's default when none is selected, and the request does not add a message to the transcript.
+- `llmTimeout` sets how long the duck waits for the model, in seconds. The default is `25`, only the model response counts,
+  `0`, a blank value or anything that is not a number means `25`, and anything above `120` means `120`.
+- `llmContextDepth` sets how many recent messages of each role are read. The default is `2`, a whole number from `1` to
+  `10` is used as written, anything above `10` means `10`, and `0`, a fraction or anything that is not a number means `2`.
+- If the request fails, returns nothing or times out, the bubble says `Quack-quack!`. There is no retry until the next
+  turn.
 - The bubble is 29 columns wide with a 25-column text field. Text wraps by word into up to five lines, a longer word is
   broken, and a message that does not fit ends with `…`.
 
@@ -13,7 +21,13 @@
 
 - The section is now ten lines tall — five of them reserved for the bubble — so the duck keeps its rows when the bubble
   appears or goes away.
+- The rest bubble is no longer fixed text: it shows the generated joke, or `Quack-quack!` when no joke arrives. While the
+  joke is pending the bubble is hidden and the beak is closed.
 - The first rest after the plugin starts has no bubble and a closed beak; the beak opens only while the bubble is shown.
+- The duck does not ask for a joke before its first swim, when `swimSpeed` is `0`, or when the sidebar is narrower than the
+  drawing. There is no separate on/off switch.
+- The joke request runs in a temporary empty session created with the current session's model, so only the recent messages
+  and metadata go to the model; the rest of the session history is not sent.
 
 ## [1.2.0] — 2026-10-18
 

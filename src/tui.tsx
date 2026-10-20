@@ -11,8 +11,9 @@ import {
   type BubbleSide,
 } from "./bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
+import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
-import { DEFAULT_SWIM_SPEED, resolveSwimSpeed } from "./options.ts"
+import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSwimSpeed } from "./options.ts"
 import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
 
 /**
@@ -112,15 +113,26 @@ export function Ducksay(props: {
   sprites?: DuckSprites
   /** The rest bubble's message; tests change it, the plugin never does. */
   bubbleText?: string
+  /**
+   * Asks for one joke at the end of a turn. Without it the bubble is the static
+   * `bubbleText`, which is what the geometry tests use.
+   */
+  joke?: (signal: AbortSignal) => Promise<string | undefined>
 }) {
   const [mode, setMode] = createSignal<Mode>("rest")
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
+  // A static bubble is ready immediately. A generated one starts hidden and
+  // becomes ready only when an answer or the fallback arrives.
+  const [jokeReady, setJokeReady] = createSignal(props.joke === undefined)
+  const [jokeText, setJokeText] = createSignal(props.bubbleText ?? DEFAULT_BUBBLE_TEXT)
 
   let column = 0
   let direction: Direction = 1
   let laneBox: BoxRenderable | undefined
   let wavePhase = 0
   let hasSwum = false
+  let lastBusy = busy()
+  let request: JokeRequest | undefined
   const lines: (TextRenderable | undefined)[] = []
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
@@ -128,7 +140,7 @@ export function Ducksay(props: {
    * The bubble is shown only after the duck has actually swum: the start-up
    * pose is a rest too, and the user asked for no bubble before the first lap.
    */
-  const bubbleVisible = () => mode() === "rest" && hasSwum
+  const bubbleVisible = () => mode() === "rest" && hasSwum && jokeReady()
   const art = () => {
     const set = sprites()
     if (direction === 1) return bubbleVisible() ? set.rightOpen : set.right
@@ -232,7 +244,7 @@ export function Ducksay(props: {
       // The bubble hugs the beak: to the right of the duck when it faces right,
       // ending at the duck's column when it faces left.
       const at = direction === 1 ? column + artWidth() : column - BUBBLE_WIDTH
-      const segments = bubbleRows(wrapBubbleText(props.bubbleText ?? DEFAULT_BUBBLE_TEXT), side)
+      const segments = bubbleRows(wrapBubbleText(jokeText()), side)
       for (const [index, segment] of segments.entries()) {
         if (segment !== undefined) rows[index] = overlay(rows[index] ?? "", segment, at)
       }
@@ -292,6 +304,60 @@ export function Ducksay(props: {
   createEffect(() => {
     const working = busy()
     setMode((current) => (working ? "swim" : current === "swim" ? "dock" : current))
+  })
+
+  const cancelJoke = () => {
+    request?.cancel()
+    request = undefined
+  }
+
+  // A request belongs to the end of a turn, not to the rest pose: it starts
+  // while the duck docks, so the bubble is usually ready by the time it stops.
+  // Reading `busy` alone is deliberate; `mode` changes during the dock and must
+  // not start a second request.
+  createEffect(() => {
+    const working = busy()
+    if (working === lastBusy) return
+    const wasBusy = lastBusy
+    lastBusy = working
+
+    if (props.joke === undefined) return
+    if (working) {
+      cancelJoke()
+      setJokeReady(false)
+      setJokeText(DEFAULT_BUBBLE_TEXT)
+      return
+    }
+
+    // A duck that never moved — zero speed, or a lane narrower than the art —
+    // has no turn to joke about.
+    if (!wasBusy || !hasSwum) return
+
+    const joke = props.joke
+    cancelJoke()
+    setJokeReady(false)
+    setJokeText(DEFAULT_BUBBLE_TEXT)
+    const current = createJokeRequest(joke)
+    request = current
+    void current.result.then((text) => {
+      // A late answer from a cancelled request must not replace the bubble of
+      // the turn that replaced it.
+      if (request !== current) return
+      request = undefined
+      setJokeText(text !== undefined && text.trim() !== "" ? text : DEFAULT_BUBBLE_TEXT)
+      setJokeReady(true)
+    })
+  })
+
+  onCleanup(cancelJoke)
+
+  // `paint` writes imperative lines, so a signal change needs an explicit
+  // repaint and frame request: rest has no timer to do it later.
+  createEffect(() => {
+    jokeReady()
+    jokeText()
+    paint()
+    props.renderer?.requestRender()
   })
 
   createEffect(() => {
@@ -390,9 +456,28 @@ export default Plugin.define({
   id: "ducksay",
   setup: (context) => {
     const swimSpeed = resolveSwimSpeed(context.options)
+    const llmTimeout = resolveLlmTimeout(context.options)
+    const contextDepth = resolveContextDepth(context.options)
     // Read once, when the section appears: the panel may open in the middle of
     // a turn, long before the next event arrives.
     const workingNow = (sessionID: string) => context.data.session.status(sessionID) === "running"
+
+    // The request reads the cache when the turn ends, not when the panel opens:
+    // by then `data` has the messages the turn produced. Without a session
+    // there is nothing to joke about, so the generator falls back to
+    // `Quack-quack!` instead of sending an empty prompt.
+    const jokeSource = (sessionID: string): JokeSource | undefined => {
+      const session = context.data.session.get(sessionID)
+      if (session === undefined) return undefined
+      const project = context.data.project.get(session.projectID)
+      const vcs = context.data.location.vcs.info()
+      return {
+        session,
+        project,
+        branch: vcs?.branch.current ?? vcs?.branch.default,
+        messages: context.data.session.message.list(sessionID),
+      }
+    }
 
     // `slot` already returns its own teardown: it unregisters the claim.
     return context.ui.slot({
@@ -405,6 +490,13 @@ export default Plugin.define({
           data={context.data}
           sessionID={sessionID}
           isRunning={() => workingNow(sessionID)}
+          joke={createJokeGenerator({
+            client: context.client,
+            sessionID,
+            source: () => jokeSource(sessionID),
+            depth: contextDepth,
+            timeoutMs: llmTimeout,
+          })}
         />
       ),
     })
