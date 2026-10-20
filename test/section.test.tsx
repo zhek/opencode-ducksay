@@ -5,7 +5,8 @@ import { createTestRenderer, ManualClock, type TestRendererSetup } from "@opentu
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { Data } from "@opencode/plugin/tui/context"
-import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
+import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
 import { Ducksay, type DuckSprites } from "../src/tui.tsx"
 
@@ -32,23 +33,36 @@ const TICK_MS = 33
 const RIGHT_EDGE = PANEL_WIDTH - DUCK_WIDTH
 
 /**
- * A body line that starts at column 0 in both sprites, so `indexOf` on the
- * captured frame is the duck's column exactly — no leading spaces to account for.
+ * The middle art line, closed and open. All four versions start at column 0, so
+ * `indexOf` on the captured frame is the duck's column exactly — no leading
+ * spaces to account for.
  */
 const FACING_RIGHT = DUCK_RIGHT[1]
+const FACING_RIGHT_OPEN = DUCK_RIGHT_OPEN[1]
 const FACING_LEFT = DUCK_LEFT[1]
+const FACING_LEFT_OPEN = DUCK_LEFT_OPEN[1]
+const RIGHT_MARKERS = [FACING_RIGHT, FACING_RIGHT_OPEN]
+const LEFT_MARKERS = [FACING_LEFT, FACING_LEFT_OPEN]
+const ALL_MARKERS = [...RIGHT_MARKERS, ...LEFT_MARKERS]
+
+/**
+ * The part of the head line both directions share: the right sprite pads before
+ * the head, the left sprite pads after it, so only the two spaces and the two
+ * underscores are common.
+ */
+const HEAD = "  __"
 
 /** The column the duck is drawn at, read back from a captured frame. */
 function columnOf(frame: string): number {
-  const rows = frame.split("\n").filter((row) => row.includes(FACING_RIGHT) || row.includes(FACING_LEFT))
+  const rows = frame.split("\n").filter((row) => ALL_MARKERS.some((marker) => row.includes(marker)))
   expect(rows).toHaveLength(1)
-  const marker = rows[0].includes(FACING_RIGHT) ? FACING_RIGHT : FACING_LEFT
-  return rows[0].indexOf(marker)
+  const marker = ALL_MARKERS.find((candidate) => rows[0]!.includes(candidate))!
+  return rows[0]!.indexOf(marker)
 }
 
 /** True when the duck faces right, i.e. towards the middle from the left edge. */
 function facesRight(frame: string): boolean {
-  return frame.includes(FACING_RIGHT)
+  return RIGHT_MARKERS.some((marker) => frame.includes(marker))
 }
 
 interface Harness {
@@ -78,15 +92,21 @@ interface Harness {
  * for the event source the component subscribes to, and `schedule` hands it the
  * manual clock so a tick does not have to wait for real time.
  */
-async function mount(
-  options: { width?: number; running?: boolean; swimSpeed?: number; sprites?: DuckSprites } = {},
-): Promise<Harness> {
+interface MountOptions {
+  width?: number
+  running?: boolean
+  swimSpeed?: number
+  sprites?: DuckSprites
+  bubbleText?: string
+}
+
+async function mount(options: MountOptions = {}): Promise<Harness> {
   const clock = new ManualClock()
   const handlers = new Map<string, (event: unknown) => void>()
   let setRunning = (_value: boolean) => {}
   let activeTimers = 0
 
-  const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 8, clock })
+  const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
   await render(
     () => {
       const data = {
@@ -116,6 +136,7 @@ async function mount(
             }
           }}
           sprites={options.sprites}
+          bubbleText={options.bubbleText}
         />
       )
     },
@@ -206,7 +227,7 @@ describe("Ducksay section", () => {
           <Ducksay primary={PRIMARY} />
         </box>
       ),
-      { width: PANEL_WIDTH, height: 8, clock },
+      { width: PANEL_WIDTH, height: 12, clock },
     )
     await setup.renderOnce()
     const rows = setup.captureCharFrame().split("\n")
@@ -224,11 +245,16 @@ describe("Ducksay section", () => {
     // Rendered at the content width (37), so a line past it has to either wrap
     // or get clipped — which is exactly the difference under test.
     const wide = "W".repeat(PANEL_CONTENT_WIDTH + 18)
-    const sprites: DuckSprites = { right: ["  __", wide], left: ["  __", wide] }
+    const sprites: DuckSprites = {
+      right: ["  __", wide],
+      left: ["  __", wide],
+      rightOpen: ["  __", wide],
+      leftOpen: ["  __", wide],
+    }
     const clock = new ManualClock()
     const setup = await testRender(() => <Ducksay primary={PRIMARY} sprites={sprites} />, {
       width: PANEL_CONTENT_WIDTH,
-      height: 8,
+      height: 12,
       clock,
     })
     await setup.renderOnce()
@@ -318,7 +344,7 @@ describe("swimming", () => {
     atRightWall.setRunning(false)
     const right = await atRightWall.tick(RIGHT_EDGE + 2)
     expect(columnOf(right)).toBe(RIGHT_EDGE)
-    expect(right.includes(FACING_LEFT)).toBe(true)
+    expect(facesRight(right)).toBe(false)
 
     const atLeftWall = await mount({ running: true })
     // Swim to the right wall, turn back, and stop while heading left.
@@ -326,7 +352,7 @@ describe("swimming", () => {
     atLeftWall.setRunning(false)
     const left = await atLeftWall.tick(RIGHT_EDGE + 2)
     expect(columnOf(left)).toBe(0)
-    expect(left.includes(FACING_RIGHT)).toBe(true)
+    expect(facesRight(left)).toBe(true)
   })
 
   test("stands still when the lane is narrower than the art", async () => {
@@ -538,5 +564,168 @@ describe("water", () => {
 
     expect(shiftOf(openWater(before), openWater(after))).toBe(0)
     expect(rows(after)[sharedIndex(after)].indexOf(LAST_ART)).toBe(0)
+  })
+})
+
+describe("rest bubble", () => {
+  /** A message that wraps to exactly `count` lines: one 25-column word per line. */
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, index) => String.fromCharCode(97 + index).repeat(BUBBLE_TEXT_WIDTH)).join(" ")
+
+  /**
+   * Swims a little, then docks at `wall` and returns the frame where the duck
+   * has come to rest with the bubble showing.
+   */
+  async function restAt(wall: "left" | "right", options: MountOptions = {}) {
+    const harness = await mount({ running: true, ...options })
+    if (wall === "left") {
+      // Swim to the right wall, turn back, and stop while heading left.
+      await harness.tick(RIGHT_EDGE + 3)
+    } else {
+      await harness.advance(COLUMN_MS * 3)
+    }
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  const rowOf = (frame: string, needle: string) =>
+    frame.split("\n").findIndex((row) => row.includes(needle))
+
+  test("shows no bubble before the first swim", async () => {
+    const harness = await mount()
+    const captured = await harness.frame()
+    await harness.dispose()
+
+    expect(captured).not.toContain("╭")
+    expect(captured).not.toContain("╰")
+    expect(captured).not.toContain("╯")
+    expect(captured).toContain(FACING_RIGHT)
+    expect(captured).not.toContain(FACING_RIGHT_OPEN)
+  })
+
+  test("shows the bubble and opens the beak when the duck comes to rest", async () => {
+    const { harness, frame } = await restAt("right")
+    expect(frame).toContain("Quack-quack!")
+    expect(frame).toContain("╭")
+    expect(frame).toContain(FACING_LEFT_OPEN)
+    expect(frame).not.toContain(FACING_LEFT)
+    await harness.dispose()
+  })
+
+  test("keeps the bubble for as long as the duck rests", async () => {
+    const { harness, frame } = await restAt("right")
+    expect(await harness.tick(10)).toBe(frame)
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("drops the bubble and closes the beak when the duck swims again", async () => {
+    const { harness } = await restAt("right")
+    harness.setRunning(true)
+    const swimming = await harness.advance(TICK_MS)
+
+    expect(swimming).not.toContain("╭")
+    expect(swimming).not.toContain("╰")
+    expect(swimming).not.toContain("╯")
+    expect(swimming).toContain(FACING_LEFT)
+    expect(swimming).not.toContain(FACING_LEFT_OPEN)
+    await harness.dispose()
+  })
+
+  test("never shows the bubble when the duck cannot swim", async () => {
+    const harness = await mount({ running: true, swimSpeed: 0 })
+    await harness.tick(5)
+    const frame = await harness.frame()
+    await harness.dispose()
+
+    expect(frame).not.toContain("╭")
+    expect(frame).toContain(FACING_RIGHT)
+  })
+
+  test("puts the bubble against the beak with a one-column tail gap", async () => {
+    const left = await restAt("left")
+    const leftRows = left.frame.split("\n")
+    const leftBeak = rowOf(left.frame, FACING_RIGHT_OPEN)
+    const leftColumn = columnOf(left.frame)
+    expect(leftColumn).toBe(0)
+    // The duck ends at `column + DUCK_WIDTH`; the tail is one column past it.
+    expect(leftRows[leftBeak]!.indexOf("╯") - (leftColumn + DUCK_WIDTH)).toBe(1)
+    await left.harness.dispose()
+
+    const right = await restAt("right")
+    const rightRows = right.frame.split("\n")
+    const rightBeak = rowOf(right.frame, FACING_LEFT_OPEN)
+    const rightColumn = columnOf(right.frame)
+    expect(rightColumn).toBe(RIGHT_EDGE)
+    // The beak starts at `column`; the tail is one column before the gap.
+    expect(rightColumn - 1 - rightRows[rightBeak]!.indexOf("╰")).toBe(1)
+    await right.harness.dispose()
+  })
+
+  test("draws a 29-column frame around a 25-column text field", async () => {
+    const { harness, frame } = await restAt("left")
+    const rows = frame.split("\n")
+    const top = rows[rowOf(frame, "╭")]!
+    const topAt = top.indexOf("╭")
+    const border = top.slice(topAt, topAt + BUBBLE_WIDTH)
+    expect(border).toHaveLength(BUBBLE_WIDTH)
+    expect(border.startsWith("╭")).toBe(true)
+    expect(border.endsWith("╮")).toBe(true)
+    expect(border.slice(1, -1)).toBe("─".repeat(BUBBLE_WIDTH - 2))
+
+    const text = rows[rowOf(frame, "Quack-quack!")]!
+    const textAt = text.indexOf("│")
+    const box = text.slice(textAt, textAt + BUBBLE_WIDTH)
+    expect(box).toHaveLength(BUBBLE_WIDTH)
+    const field = box.slice(2, 2 + BUBBLE_TEXT_WIDTH)
+    expect(field).toHaveLength(BUBBLE_TEXT_WIDTH)
+    expect(field.trimEnd()).toBe("Quack-quack!")
+    expect(box.slice(-2)).toBe(" │")
+    await harness.dispose()
+  })
+
+  test("rests the bottom border on the head row for one to four lines", async () => {
+    for (let count = 1; count < BUBBLE_MAX_LINES; count++) {
+      const { harness, frame } = await restAt("left", { bubbleText: lines(count) })
+      const rows = frame.split("\n")
+      const head = rowOf(frame, HEAD)
+      const beak = rowOf(frame, FACING_RIGHT_OPEN)
+      expect(head).toBeGreaterThanOrEqual(0)
+      // The bottom border shares the head row with the duck's head…
+      expect(rows[head]).toContain("╰")
+      expect(rows[head]).toContain("╯")
+      // …and the tail shares the beak row, without a border line.
+      expect(rows[beak]!.indexOf("╯")).toBeGreaterThan(0)
+      expect(rows[beak]).not.toContain("─")
+      await harness.dispose()
+    }
+  })
+
+  test("puts the bottom border on the beak row and drops the tail at five lines", async () => {
+    const { harness, frame } = await restAt("left", { bubbleText: lines(BUBBLE_MAX_LINES) })
+    const rows = frame.split("\n")
+    const beak = rowOf(frame, FACING_RIGHT_OPEN)
+
+    expect(rows[beak]).toContain("╰")
+    expect(rows[beak]).toContain("╯")
+    expect(rows[beak]).toContain("─")
+    // No row carries a lone tail glyph.
+    expect(rows.filter((row) => (row.includes("╯") || row.includes("╰")) && !row.includes("─"))).toHaveLength(0)
+    await harness.dispose()
+  })
+
+  test("keeps the duck on the same rows when the bubble appears", async () => {
+    const still = await mount()
+    const before = await still.frame()
+    const headBefore = rowOf(before, HEAD)
+    await still.dispose()
+
+    const { harness, frame } = await restAt("right")
+    const rows = frame.split("\n")
+    expect(rowOf(frame, HEAD)).toBe(headBefore)
+    expect(rows[headBefore + 1]).toContain(FACING_LEFT_OPEN)
+    expect(rows[headBefore + 2]).toContain(DUCK_LEFT[2].trimEnd())
+    await harness.dispose()
   })
 })

@@ -4,7 +4,7 @@ import { ManualClock, createTestRenderer } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { Context } from "@opencode/plugin/tui/context"
-import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import plugin from "../src/tui.tsx"
 
 /** `SESSION_SIDEBAR_WIDTH` from OpenCode's session sidebar. */
@@ -19,9 +19,17 @@ const COLUMN_MS = 1000 / 12
 const SESSION = "ses_duck"
 const OTHER_SESSION = "ses_other"
 
-/** A body line that starts at column 0 in both sprites, so its index is the duck's column. */
+/**
+ * The middle art line, closed and open. All four versions start at column 0, so
+ * its index is the duck's column.
+ */
 const FACING_RIGHT = DUCK_RIGHT[1]
+const FACING_RIGHT_OPEN = DUCK_RIGHT_OPEN[1]
 const FACING_LEFT = DUCK_LEFT[1]
+const FACING_LEFT_OPEN = DUCK_LEFT_OPEN[1]
+const RIGHT_MARKERS = [FACING_RIGHT, FACING_RIGHT_OPEN]
+const LEFT_MARKERS = [FACING_LEFT, FACING_LEFT_OPEN]
+const ALL_MARKERS = [...RIGHT_MARKERS, ...LEFT_MARKERS]
 
 /** Both execution events carry the session and nothing else the section looks at. */
 const forSession = { data: { sessionID: SESSION } }
@@ -29,10 +37,15 @@ const forOtherSession = { data: { sessionID: OTHER_SESSION } }
 
 /** The column the duck is drawn at, read back from a captured frame. */
 function columnOf(frame: string): number {
-  const rows = frame.split("\n").filter((row) => row.includes(FACING_RIGHT) || row.includes(FACING_LEFT))
+  const rows = frame.split("\n").filter((row) => ALL_MARKERS.some((marker) => row.includes(marker)))
   expect(rows).toHaveLength(1)
-  const marker = rows[0].includes(FACING_RIGHT) ? FACING_RIGHT : FACING_LEFT
-  return rows[0].indexOf(marker)
+  const marker = ALL_MARKERS.find((candidate) => rows[0]!.includes(candidate))!
+  return rows[0]!.indexOf(marker)
+}
+
+/** True when the duck faces right, i.e. towards the middle from the left edge. */
+function facesRight(frame: string): boolean {
+  return RIGHT_MARKERS.some((marker) => frame.includes(marker))
 }
 
 interface Fake {
@@ -124,7 +137,7 @@ async function mountClaim(
   options: { options?: Record<string, unknown>; running?: boolean } = {},
 ): Promise<Mounted> {
   const clock = new ManualClock()
-  const setup = await createTestRenderer({ width: PANEL_WIDTH, height: 8, clock })
+  const setup = await createTestRenderer({ width: PANEL_WIDTH, height: 12, clock })
   const restoreTimers = useClockAsGlobalTimers(clock)
   const harness = fake({ renderer: setup.renderer, options: options.options })
   if (options.running === true) harness.statuses.set(SESSION, "running")
@@ -214,7 +227,7 @@ describe("section behaviour through the plugin", () => {
       const docked = await mounted.swim(RIGHT_EDGE + 6)
       const column = columnOf(docked)
       expect([0, RIGHT_EDGE]).toContain(column)
-      expect(docked.includes(FACING_RIGHT)).toBe(column === 0)
+      expect(facesRight(docked)).toBe(column === 0)
     } finally {
       await mounted.close()
     }

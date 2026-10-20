@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A speech bubble at the duck's beak when it comes to rest after swimming: `Quack-quack!`, with the beak open. The bubble
+  faces the duck, stays for the whole rest and disappears when the duck swims again.
+- The bubble is 29 columns wide with a 25-column text field. Text wraps by word into up to five lines, a longer word is
+  broken, and a message that does not fit ends with `…`.
+
+### Changed
+
+- The section is now ten lines tall — five of them reserved for the bubble — so the duck keeps its rows when the bubble
+  appears or goes away.
+- The first rest after the plugin starts has no bubble and a closed beak; the beak opens only while the bubble is shown.
+
 ## [1.2.0] — 2026-10-18
 
 The duck now swims on water.
