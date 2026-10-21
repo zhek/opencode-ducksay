@@ -18,6 +18,7 @@ const Conditional = Show as unknown as (props: {
 }) => unknown
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
+import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
 import { Ducksay, type DuckSprites } from "../src/tui.tsx"
 
@@ -794,22 +795,273 @@ describe("generated joke", () => {
     return { harness, frame }
   }
 
-  test("shows no bubble and a closed beak while the joke is pending", async () => {
-    const pending = controlledJoke()
-    const { harness, frame } = await dockWithJoke(pending.joke)
+  /**
+   * Docks at the right wall and stops the clock on the first frame that has
+   * the bubble. A whole-tick jump would already be several frames into the
+   * waiting cycle, so the step is `TICK_MS` and the loop breaks at the bubble.
+   */
+  async function restWithJoke(
+    joke: (signal: AbortSignal) => Promise<string | undefined>,
+    options: MountOptions = {},
+  ) {
+    const harness = await mount({ running: true, joke, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    let frame = ""
+    for (let step = 0; step < (RIGHT_EDGE + 2) * 4; step += 1) {
+      frame = await harness.advance(TICK_MS)
+      if (frame.includes("╭")) break
+    }
+    return { harness, frame }
+  }
 
-    expect(frame).not.toContain("╭")
-    expect(frame).not.toContain("╰")
+  test("shows the waiting dots and a closed beak while the joke is pending", async () => {
+    const pending = controlledJoke()
+    const { harness, frame } = await restWithJoke(pending.joke)
+
+    expect(frame).toContain("╭")
+    expect(frame).toContain("Quack.")
+    expect(frame).not.toContain("Quack..")
     expect(frame).toContain(FACING_LEFT)
     expect(frame).not.toContain(FACING_LEFT_OPEN)
     expect(pending.calls).toHaveLength(1)
+    expect(harness.activeTimers()).toBe(1)
 
     await harness.dispose()
+  })
+
+  test("grows the ellipsis one dot at a time and holds the third frame", async () => {
+    const pending = controlledJoke()
+    const { harness, frame } = await restWithJoke(pending.joke)
+    expect(frame).toContain("Quack.")
+    expect(frame).not.toContain("Quack..")
+
+    const two = await harness.advance(THINK_FRAME_MS)
+    expect(two).toContain("Quack..")
+    expect(two).not.toContain("Quack...")
+
+    const three = await harness.advance(THINK_FRAME_MS)
+    expect(three).toContain("Quack...")
+
+    // The triple is held for a second step, so the loop back to one dot reads
+    // as a cycle rather than a flicker.
+    const held = await harness.advance(THINK_FRAME_MS)
+    expect(held).toBe(three)
+
+    const again = await harness.advance(THINK_FRAME_MS)
+    expect(again).toContain("Quack.")
+    expect(again).not.toContain("Quack..")
+
+    await harness.dispose()
+  })
+
+  test("stops the waiting timer when the answer is fully shown", async () => {
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke)
+    expect(harness.activeTimers()).toBe(1)
+
+    pending.calls[0]!.resolve("One joke")
+    await settle()
+    await harness.advance(WORD_FRAME_MS * 3)
+
+    expect(await harness.frame()).toContain("One joke")
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("drops the waiting bubble when the duck swims again", async () => {
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke)
+
+    harness.setRunning(true)
+    const swimming = await harness.advance(TICK_MS)
+
+    expect(swimming).not.toContain("╭")
+    expect(swimming).toContain(FACING_LEFT)
+    expect(swimming).not.toContain(FACING_LEFT_OPEN)
+    // Only the swim heartbeat is left; the waiting timer is gone with the rest.
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  describe("typing", () => {
+    /** A joke short enough to stay on one 25-column line. */
+    const JOKE = "One two three four five"
+    const WORDS = ["One", "One two", "One two three", "One two three four", JOKE]
+
+    /** Rests, then answers, and returns the harness with the first word shown. */
+    async function startTyping(text = JOKE) {
+      const pending = controlledJoke()
+      const { harness, frame } = await restWithJoke(pending.joke)
+      expect(frame).toContain("Quack")
+      pending.calls[0]!.resolve(text)
+      await settle()
+      return harness
+    }
+
+    /** Captures the first frame and one frame per word after it. */
+    async function framesPerWord(harness: Harness, words: number) {
+      const frames = [await harness.frame()]
+      for (let index = 1; index < words; index += 1) {
+        await harness.advance(WORD_FRAME_MS)
+        frames.push(await harness.frame())
+      }
+      return frames
+    }
+
+    test("puts the first word where the waiting dots were", async () => {
+      const harness = await startTyping()
+      const first = await harness.frame()
+
+      expect(first).toContain("One")
+      expect(first).not.toContain("two")
+      expect(first).not.toContain("Quack")
+      expect(first).toContain(FACING_LEFT_OPEN)
+      expect(first).not.toContain(FACING_LEFT)
+      await harness.dispose()
+    })
+
+    test("reveals whole words in order and leaves the full text", async () => {
+      const harness = await startTyping()
+      const frames = await framesPerWord(harness, WORDS.length)
+
+      for (const [index, text] of WORDS.entries()) {
+        expect(frames[index]).toContain(text)
+        const next = WORDS[index + 1]
+        if (next !== undefined) expect(frames[index]).not.toContain(next)
+      }
+      expect(harness.activeTimers()).toBe(0)
+      // A finished joke is not repainted by a timer any more.
+      expect(await harness.tick(10)).toBe(frames[WORDS.length - 1])
+      await harness.dispose()
+    })
+
+    test("flaps the beak every two words and opens it on the last", async () => {
+      const harness = await startTyping()
+      const frames = await framesPerWord(harness, WORDS.length)
+
+      expect(frames[0]).toContain(FACING_LEFT_OPEN)
+      expect(frames[1]).toContain(FACING_LEFT_OPEN)
+      expect(frames[2]).toContain(FACING_LEFT)
+      expect(frames[2]).not.toContain(FACING_LEFT_OPEN)
+      expect(frames[3]).toContain(FACING_LEFT)
+      expect(frames[3]).not.toContain(FACING_LEFT_OPEN)
+      expect(frames[4]).toContain(FACING_LEFT_OPEN)
+      expect(frames[4]).not.toContain(FACING_LEFT)
+      await harness.dispose()
+    })
+
+    test("opens the beak on the last word even when the cadence would close it", async () => {
+      const harness = await startTyping("One two three")
+      await harness.advance(WORD_FRAME_MS * 3)
+      const done = await harness.frame()
+
+      expect(done).toContain("One two three")
+      expect(done).toContain(FACING_LEFT_OPEN)
+      expect(done).not.toContain(FACING_LEFT)
+      expect(harness.activeTimers()).toBe(0)
+      await harness.dispose()
+    })
+
+    test("grows to five lines without moving the duck and drops the tail", async () => {
+      // One full-width word per line, so the joke fills exactly five lines.
+      const joke = Array.from({ length: BUBBLE_MAX_LINES }, (_, index) =>
+        String.fromCharCode(97 + index).repeat(BUBBLE_TEXT_WIDTH),
+      ).join(" ")
+      const harness = await startTyping(joke)
+      const first = await harness.frame()
+      const headRow = first.split("\n").findIndex((row) => row.includes(HEAD))
+      expect(headRow).toBeGreaterThan(0)
+      // A short bubble hangs its tail on the beak row, below the bottom border.
+      expect(
+        first
+          .split("\n")
+          .filter((row) => (row.includes("╯") || row.includes("╰")) && !row.includes("─")),
+      ).toHaveLength(1)
+
+      await harness.advance(WORD_FRAME_MS * (BUBBLE_MAX_LINES + 1))
+      const done = await harness.frame()
+      const rows = done.split("\n")
+
+      // The bubble grows up, not down: the duck keeps its rows.
+      expect(rows.findIndex((row) => row.includes(HEAD))).toBe(headRow)
+      const beak = rows.findIndex((row) => row.includes(FACING_LEFT_OPEN))
+      expect(beak).toBe(headRow + 1)
+      expect(rows[beak]).toContain("╰")
+      expect(rows[beak]).toContain("╯")
+      expect(rows[beak]).toContain("─")
+      // At five lines the bottom border is on the beak row, so no lone tail is
+      // left anywhere.
+      expect(
+        rows.filter((row) => (row.includes("╯") || row.includes("╰")) && !row.includes("─")),
+      ).toHaveLength(0)
+      expect(harness.activeTimers()).toBe(0)
+      await harness.dispose()
+    })
+
+    test("holds a word with punctuation for two steps", async () => {
+      const harness = await startTyping("Wait, now go")
+      const first = await harness.frame()
+      expect(first).toContain("Wait,")
+      expect(first).not.toContain("now")
+
+      const held = await harness.advance(WORD_FRAME_MS)
+      expect(held).toBe(first)
+
+      const next = await harness.advance(WORD_FRAME_MS)
+      expect(next).toContain("Wait, now")
+      await harness.dispose()
+    })
+
+    test("starts typing at once when the answer came before the duck stopped", async () => {
+      const harness = await mount({ running: true, joke: async () => JOKE })
+      await harness.advance(COLUMN_MS * 3)
+      harness.setRunning(false)
+
+      let frame = ""
+      for (let step = 0; step < (RIGHT_EDGE + 2) * 4; step += 1) {
+        frame = await harness.advance(TICK_MS)
+        if (frame.includes("╭")) break
+      }
+
+      expect(frame).not.toContain("Quack")
+      expect(frame).toContain("One")
+      expect(frame).not.toContain("two")
+      expect(frame).toContain(FACING_LEFT_OPEN)
+      await harness.dispose()
+    })
+
+    test("keeps the timer while typing and drops it when the duck swims away", async () => {
+      const harness = await startTyping()
+      await harness.advance(WORD_FRAME_MS)
+      expect(harness.activeTimers()).toBe(1)
+
+      harness.setRunning(true)
+      const swimming = await harness.advance(TICK_MS)
+      expect(swimming).not.toContain("╭")
+      expect(swimming).toContain(FACING_LEFT)
+      expect(swimming).not.toContain(FACING_LEFT_OPEN)
+      // The swim heartbeat is the only one left.
+      expect(harness.activeTimers()).toBe(1)
+      await harness.dispose()
+    })
+
+    test("stops the typing timer when the section is unmounted", async () => {
+      const harness = await startTyping()
+      await harness.advance(WORD_FRAME_MS)
+      expect(harness.activeTimers()).toBe(1)
+
+      await harness.unmount()
+      expect(harness.activeTimers()).toBe(0)
+      await harness.dispose()
+    })
   })
 
   test("shows a successful joke and opens the beak", async () => {
     const { harness } = await dockWithJoke(async () => "The parser quacks back")
     await settle()
+    // The answer may have landed while docking; give every word its turn.
+    await harness.advance(WORD_FRAME_MS * 4)
     const shown = await harness.frame()
 
     expect(shown).toContain("The parser quacks back")
@@ -912,10 +1164,15 @@ describe("generated joke", () => {
     const docked = await harness.tick(RIGHT_EDGE + 2)
     expect(pending.calls).toHaveLength(2)
     expect(docked).not.toContain("late joke")
-    expect(docked).not.toContain("╭")
+    // The new turn asks again, so the rest shows the waiting dots, not the old
+    // joke and not a hidden bubble.
+    expect(docked).toContain("╭")
+    expect(docked).toContain("Quack")
+    expect(docked).not.toContain(FACING_RIGHT_OPEN)
 
     pending.calls[1]!.resolve("second joke")
     await settle()
+    await harness.advance(WORD_FRAME_MS * 3)
     const shown = await harness.frame()
     expect(shown).toContain("second joke")
     expect(shown).not.toContain("late joke")
@@ -924,14 +1181,16 @@ describe("generated joke", () => {
     await harness.dispose()
   })
 
-  test("unmounting aborts the pending request", async () => {
+  test("unmounting aborts the pending request and stops the waiting timer", async () => {
     const pending = controlledJoke()
     const { harness } = await dockWithJoke(pending.joke)
     const signal = pending.calls[0]!.signal
 
     expect(signal.aborted).toBe(false)
+    expect(harness.activeTimers()).toBe(1)
     await harness.unmount()
     expect(signal.aborted).toBe(true)
+    expect(harness.activeTimers()).toBe(0)
     await harness.dispose()
   })
 })

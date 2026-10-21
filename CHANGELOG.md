@@ -14,6 +14,9 @@
   `10` is used as written, anything above `10` means `10`, and `0`, a fraction or anything that is not a number means `2`.
 - If the request fails, returns nothing or times out, the bubble says `Quack-quack!`. There is no retry until the next
   turn.
+- While the joke is on its way, the bubble says `Quack` with an ellipsis that grows one dot at a time and then loops.
+- The joke appears word by word. The beak opens and closes every couple of words, pauses a little longer after
+  punctuation, and always stops open on the last word.
 - The bubble is 29 columns wide with a 25-column text field. Text wraps by word into up to five lines, a longer word is
   broken, and a message that does not fit ends with `…`.
 
@@ -21,9 +24,10 @@
 
 - The section is now ten lines tall — five of them reserved for the bubble — so the duck keeps its rows when the bubble
   appears or goes away.
-- The rest bubble is no longer fixed text: it shows the generated joke, or `Quack-quack!` when no joke arrives. While the
-  joke is pending the bubble is hidden and the beak is closed.
-- The first rest after the plugin starts has no bubble and a closed beak; the beak opens only while the bubble is shown.
+- The rest bubble is no longer fixed text: it is visible while the answer is pending and shows `Quack` with the growing
+  ellipsis, then types the generated joke word by word, or `Quack-quack!` when no joke arrives.
+- The first rest after the plugin starts has no bubble. The beak stays closed while the duck waits and then flaps with the
+  typed words, ending open.
 - The duck does not ask for a joke before its first swim, when `swimSpeed` is `0`, or when the sidebar is narrower than the
   drawing. There is no separate on/off switch.
 - The joke request runs in a temporary empty session created with the current session's model, so only the recent messages

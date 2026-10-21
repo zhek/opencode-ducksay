@@ -522,10 +522,18 @@ describe("generated jokes through the plugin", () => {
 
       // The turn is over and the duck is at rest, but the answer is pending.
       expect(deferred.calls).toHaveLength(1)
-      expect(await mounted.frame()).not.toContain("╭")
+      const waiting = await mounted.frame()
+      expect(waiting).toContain("╭")
+      expect(waiting).toContain("Quack")
 
       deferred.calls[0]!.resolve({ text: "The parser quacks" })
       await settle()
+      const first = await mounted.frame()
+      expect(first).toContain("The")
+      expect(first).not.toContain("parser")
+      expect(first).toContain(FACING_LEFT_OPEN)
+
+      await mounted.swim(4)
       const shown = await mounted.frame()
       expect(shown).toContain("The parser quacks")
       expect(shown).toContain(FACING_LEFT_OPEN)
@@ -544,7 +552,10 @@ describe("generated jokes through the plugin", () => {
       expect(deferred.calls).toHaveLength(2)
       const second = deferred.calls[1]!
       expect(second.options?.signal?.aborted).toBe(false)
-      expect(await mounted.frame()).not.toContain("╭")
+      const waitingAgain = await mounted.frame()
+      expect(waitingAgain).toContain("╭")
+      expect(waitingAgain).toContain("Quack")
+      expect(waitingAgain).not.toContain("The parser quacks")
 
       // The next turn aborts it, and its late answer never reaches the bubble.
       mounted.harness.emit("session.execution.started", forSession)
