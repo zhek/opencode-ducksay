@@ -2,7 +2,8 @@
 
 An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side on the
 water while a session is working. When the turn ends it comes to rest and says a short joke in a speech bubble, using the
-model of the current session. If no joke arrives, it falls back to `Quack-quack!`.
+model of the current session: while the answer is on its way it waits with a growing ellipsis, then speaks the joke word
+by word. If no joke arrives, it falls back to `Quack-quack!`.
 
 ```text
 Ducksay
@@ -18,7 +19,8 @@ ___( o)< ╯
 ```
 
 The section is always ten lines tall: the heading, five rows reserved for the bubble, three rows of duck and the lower
-water line. The reserve stays empty while the bubble is hidden, so the duck keeps the same rows throughout.
+water line. The reserve stays empty only before the first swim; during a rest it holds the waiting dots or the joke, so
+the duck keeps the same rows throughout.
 
 The plugin adds one section below OpenCode's own `Context` and `MCP` sections.
 
@@ -54,12 +56,15 @@ title, project and branch. The request is built from what OpenCode already has l
 diffs are not sent. The joke is written in the language of your last message, or in the language of the previous messages
 when that one is unclear.
 
-While the joke is on its way, the bubble is hidden and the beak stays closed. When the answer arrives, the bubble appears
-with the joke and the beak opens. If the request fails, comes back empty or takes too long, the duck says `Quack-quack!`
-instead. It does not retry until the next turn. The bubble stands on the side the duck faces — to the right of a duck at
-the left edge, to the left of a duck at the right edge — and its tail points at the beak from one column away. It stays
-for the whole rest and disappears as soon as the duck swims again, closing the beak with it. The very first rest, right
-after the plugin starts, has no bubble.
+While the joke is on its way, the bubble is already there: the duck says `Quack` with an ellipsis that grows one dot at a
+time — `Quack.`, `Quack..`, `Quack...` — then starts again, and the beak stays closed. When the answer arrives, the first
+word replaces the dots and the rest follow one word at a time, as if the duck were saying them. The beak opens and closes
+every couple of words and always stops open on the last word; a word followed by a full stop, comma, exclamation or
+question mark stays on screen a little longer. If the request fails, comes back empty or takes too long, the duck says
+`Quack-quack!` instead. It does not retry until the next turn. The bubble stands on the side the duck faces — to the right
+of a duck at the left edge, to the left of a duck at the right edge — and its tail points at the beak from one column
+away. It stays for the whole rest and disappears as soon as the duck swims again, taking the waiting or typing with it and
+closing the beak. The very first rest, right after the plugin starts, has no bubble.
 
 The bubble is 29 columns wide with a 25-column text field. Text wraps by word into at most five lines; a word longer
 than the field is broken, and text that does not fit ends with `…`. A generated answer is shortened to what the bubble can

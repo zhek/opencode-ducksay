@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
-import { createEffect, createSignal, onCleanup } from "solid-js/dist/solid.js"
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js/dist/solid.js"
 import {
   BUBBLE_CONTENT_ROWS,
   BUBBLE_MAX_LINES,
@@ -14,12 +14,23 @@ import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.t
 import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSwimSpeed } from "./options.ts"
+import {
+  THINKING_STEPS,
+  THINK_FRAME_MS,
+  WORD_FRAME_MS,
+  beakOpen as beakOpenAt,
+  bubbleWords,
+  holdsAfter,
+  revealText,
+  thinkingText,
+} from "./thinking.ts"
 import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
 
 /**
- * What the duck is doing. `rest` is the only state that holds no timer, and it
- * is also the pose a reader expects to see: the duck parked at a lane edge,
- * nose pointing at the middle of the lane.
+ * What the duck is doing. `rest` is the only state without a travel timer, and
+ * it is also the pose a reader expects to see: the duck parked at a lane edge,
+ * nose pointing at the middle of the lane. The waiting and typing animations
+ * are rest-only timers of their own.
  */
 type Mode = "rest" | "swim" | "dock"
 
@@ -125,6 +136,11 @@ export function Ducksay(props: {
   // becomes ready only when an answer or the fallback arrives.
   const [jokeReady, setJokeReady] = createSignal(props.joke === undefined)
   const [jokeText, setJokeText] = createSignal(props.bubbleText ?? DEFAULT_BUBBLE_TEXT)
+  // Index into `THINKING_STEPS`: which frame of the waiting dots is on screen.
+  const [dotsStep, setDotsStep] = createSignal(0)
+  // How many words of the joke have been shown. The answer sets it to `1`, so
+  // the first word replaces the waiting dots without an empty frame.
+  const [shown, setShown] = createSignal(0)
 
   let column = 0
   let direction: Direction = 1
@@ -137,14 +153,44 @@ export function Ducksay(props: {
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
   /**
-   * The bubble is shown only after the duck has actually swum: the start-up
-   * pose is a rest too, and the user asked for no bubble before the first lap.
+   * The resting pose the bubble belongs to. It is only entered after the duck
+   * has actually swum: the start-up pose is a rest too, and the user asked for
+   * no bubble before the first lap.
    */
-  const bubbleVisible = () => mode() === "rest" && hasSwum && jokeReady()
+  const resting = () => mode() === "rest" && hasSwum
+  /**
+   * The bubble is shown for the whole rest: either the waiting dots, while the
+   * answer is on its way, or the joke itself. The duck's rows and the section's
+   * height do not depend on which of the two is there.
+   */
+  const bubbleVisible = () => resting()
+  /**
+   * Whether the beak is open. It stays shut until there is a joke to say, so a
+   * waiting duck does not look like it is talking over the dots. While the joke
+   * is being typed it follows the word cadence, and the last word always leaves
+   * it open. A static `bubbleText` is not animated, so it is open throughout.
+   */
+  const beakOpen = () => {
+    if (!resting()) return false
+    if (props.joke === undefined) return true
+    if (!jokeReady()) return false
+    return beakOpenAt(shown(), bubbleWords(jokeText()).length)
+  }
+  /**
+   * What the bubble currently says. The waiting dots replace the joke text
+   * until an answer arrives, so a failed or slow request never leaves the
+   * previous turn's joke on screen. A generated joke is revealed word by word;
+   * the static test seam is shown whole.
+   */
+  const bubbleText = () => {
+    if (props.joke === undefined) return jokeText()
+    if (!jokeReady()) return thinkingText(THINKING_STEPS[dotsStep()] ?? 1)
+    return revealText(jokeText(), shown())
+  }
   const art = () => {
     const set = sprites()
-    if (direction === 1) return bubbleVisible() ? set.rightOpen : set.right
-    return bubbleVisible() ? set.leftOpen : set.left
+    if (direction === 1) return beakOpen() ? set.rightOpen : set.right
+    return beakOpen() ? set.leftOpen : set.left
   }
   const artWidth = () => {
     const { right, left, rightOpen, leftOpen } = sprites()
@@ -244,7 +290,7 @@ export function Ducksay(props: {
       // The bubble hugs the beak: to the right of the duck when it faces right,
       // ending at the duck's column when it faces left.
       const at = direction === 1 ? column + artWidth() : column - BUBBLE_WIDTH
-      const segments = bubbleRows(wrapBubbleText(jokeText()), side)
+      const segments = bubbleRows(wrapBubbleText(bubbleText()), side)
       for (const [index, segment] of segments.entries()) {
         if (segment !== undefined) rows[index] = overlay(rows[index] ?? "", segment, at)
       }
@@ -326,6 +372,8 @@ export function Ducksay(props: {
       cancelJoke()
       setJokeReady(false)
       setJokeText(DEFAULT_BUBBLE_TEXT)
+      setDotsStep(0)
+      setShown(0)
       return
     }
 
@@ -337,6 +385,8 @@ export function Ducksay(props: {
     cancelJoke()
     setJokeReady(false)
     setJokeText(DEFAULT_BUBBLE_TEXT)
+    setDotsStep(0)
+    setShown(0)
     const current = createJokeRequest(joke)
     request = current
     void current.result.then((text) => {
@@ -345,6 +395,9 @@ export function Ducksay(props: {
       if (request !== current) return
       request = undefined
       setJokeText(text !== undefined && text.trim() !== "" ? text : DEFAULT_BUBBLE_TEXT)
+      // The first word is on screen in the same paint as the answer; the typing
+      // timer only has to fetch the words after it.
+      setShown(1)
       setJokeReady(true)
     })
   })
@@ -352,12 +405,77 @@ export function Ducksay(props: {
   onCleanup(cancelJoke)
 
   // `paint` writes imperative lines, so a signal change needs an explicit
-  // repaint and frame request: rest has no timer to do it later.
+  // repaint and frame request. The waiting and typing timers only move signals;
+  // they never paint on their own.
   createEffect(() => {
     jokeReady()
     jokeText()
+    dotsStep()
+    shown()
     paint()
     props.renderer?.requestRender()
+  })
+
+  // The waiting dots run only while the duck rests with an answer still on the
+  // way. `mode` and `jokeReady` start and stop the effect; `hasSwum` is read as
+  // a plain flag, and the effect re-runs on the mode change that follows the
+  // first swim. `dotsStep` is deliberately not read here: advancing it must not
+  // tear down and recreate the interval on every frame.
+  createEffect(() => {
+    const renderer = props.renderer
+    if (renderer === undefined || props.joke === undefined) return
+    if (!resting() || jokeReady()) return
+
+    const tick = () => setDotsStep((step) => (step + 1) % THINKING_STEPS.length)
+    const stop = (props.schedule ?? defaultSchedule)(tick, THINK_FRAME_MS)
+    onCleanup(stop)
+  })
+
+  // The joke is revealed one word per tick while the duck rests. The effect
+  // starts on the answer and stops itself on the last word, so a rest with the
+  // whole joke on screen holds no timer. `shown` is read through `untrack`:
+  // tracking it would tear down the interval on every word and lose the pause
+  // flag for punctuation.
+  createEffect(() => {
+    const renderer = props.renderer
+    if (renderer === undefined || props.joke === undefined) return
+    if (!resting() || !jokeReady()) return
+
+    const text = jokeText()
+    const words = bubbleWords(text)
+    const total = words.length
+    let typed = untrack(shown)
+    if (typed < 1 && total > 0) {
+      // Defensive: an answer always sets the first word, but a bubble with no
+      // word at all is the one frame the user must never see.
+      typed = 1
+      setShown(1)
+    }
+    if (typed >= total) return
+
+    // The word already on screen may itself end a phrase: a restart must not
+    // lose the pause that follows it.
+    let hold = holdsAfter(words[typed - 1] ?? "")
+    let stop: (() => void) | undefined
+    const tick = () => {
+      if (hold) {
+        hold = false
+        return
+      }
+      typed += 1
+      setShown(typed)
+      if (typed >= total) {
+        // The interval must not keep ticking over a finished joke.
+        stop?.()
+        stop = undefined
+        return
+      }
+      // A punctuated word stays on screen for two steps, so the pause reads as
+      // speech rather than a uniform metronome.
+      hold = holdsAfter(words[typed - 1] ?? "")
+    }
+    stop = (props.schedule ?? defaultSchedule)(tick, WORD_FRAME_MS)
+    onCleanup(() => stop?.())
   })
 
   createEffect(() => {
