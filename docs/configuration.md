@@ -45,7 +45,7 @@ section animates.
 | Value | Result |
 | --- | --- |
 | not set | `12` columns per second |
-| `0` | The duck never moves, the water never travels, no timer runs and no joke is requested |
+| `0` | The duck never moves, the water never travels and no joke is requested — except for the marker of a question waiting for an answer |
 | `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
 | a number written as a string, `"24"` | Read as the same number |
 | anything else — a negative number, a word, an empty value | Falls back to `12` |
@@ -53,6 +53,9 @@ section animates.
 A number without quotes is the normal way to write it. Quotes are accepted, because they are a common slip and silently
 swapping a requested `24` for the default would be worse than reading what was written. An empty value is treated as "not
 set" rather than as `0`, so a blank field cannot quietly freeze the duck.
+
+At `0` the section still animates while a question waits for an answer: the marker above the beak keeps changing, so the
+duck still says that something is waiting for you. Everything else stands still.
 
 A small speed makes the water slow as well as the duck, which at `1` means both barely move for the half-minute a crossing
 takes. The water also stops when the sidebar is narrower than the duck's drawing, because then the duck has nowhere to

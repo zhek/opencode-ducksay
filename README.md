@@ -3,7 +3,8 @@
 An ASCII duck in the session sidebar of the [OpenCode](https://opencode.ai) TUI. It swims from side to side on the
 water while a session is working. When the turn ends it comes to rest and says a short joke in a speech bubble, using the
 model of the current session: while the answer is on its way it waits with a growing ellipsis, then speaks the joke word
-by word. If no joke arrives, it falls back to `Quack-quack!`.
+by word. If no joke arrives, it falls back to `Quack-quack!`. While a question of the session waits for an answer, the
+duck stops and shows a marker above its beak.
 
 ```text
 Ducksay
@@ -47,6 +48,24 @@ not shown at all.
 The duck swims for as long as the session is working — not only while text arrives, but through tool calls, permission
 prompts and retries. When the turn ends it swims on to the edge of the sidebar, turns around, and stops there nose towards
 the middle. At rest it always stands at an edge, on the left one when the plugin starts.
+
+## A question
+
+When the session asks you something and waits for your answer, the duck stops where it is: the water stops with it, the
+bubble is hidden and the beak is closed. Above the beak a marker appears and changes every 300 ms — `?`, `!`, `⸮`, `!` —
+until the question is answered or cancelled. The marker stands exactly over the bracket next to the beak, so it is right
+above the duck's mouth whichever way it faces, and it stays in that column while the frames change.
+
+Nothing is lost while the duck waits. The joke keeps the frame it had — the same ellipsis, the same word — and when the
+question closes the duck carries on from the same column, in the same direction, with the water at the same phase. If the
+session is still working, it swims on; if the turn has ended, it swims to the edge and rests as usual.
+
+The marker shows even before the first swim, and at `swimSpeed: 0` it is the only thing that moves. Only a question of the
+session shown in the panel counts: permission requests and the assistant's own questions leave the duck alone.
+
+While a question is open, the duck does not ask for a new joke. A request that is already on its way is not cancelled
+because of the question, and its answer is used once the question closes. If the turn ends while the question is still
+open, the request waits for the question to close and the session to be free again.
 
 ## Rest
 

@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js/dist/solid.js"
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js/dist/solid.js"
 import {
   BUBBLE_CONTENT_ROWS,
   BUBBLE_MAX_LINES,
@@ -14,6 +14,7 @@ import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.t
 import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSwimSpeed } from "./options.ts"
+import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
   THINKING_STEPS,
   THINK_FRAME_MS,
@@ -89,6 +90,8 @@ const HEAD_ROW = BUBBLE_MAX_LINES
 const BEAK_ROW = HEAD_ROW + 1
 const BODY_ROW = HEAD_ROW + 2
 const LOWER_WATER_ROW = HEAD_ROW + 3
+/** The question marker sits on the row above the head, inside the reserve. */
+const QUESTION_ROW = HEAD_ROW - 1
 
 /**
  * The `Ducksay` section of the session sidebar.
@@ -141,6 +144,21 @@ export function Ducksay(props: {
   // How many words of the joke have been shown. The answer sets it to `1`, so
   // the first word replaces the waiting dots without an empty frame.
   const [shown, setShown] = createSignal(0)
+  // Forms of this session that are still waiting for an answer. A set rather
+  // than a counter so a repeated event for one form cannot keep the marker up
+  // after that form is gone.
+  const [askedForms, setAskedForms] = createSignal<ReadonlySet<string>>(new Set())
+  // A turn that has ended and still owes a joke. The request waits while a
+  // form of the session is open, or while the session is busy again.
+  const [owed, setOwed] = createSignal(false)
+  // The marker frame starts at `?` and advances while at least one form waits.
+  const [questionFrame, setQuestionFrame] = createSignal(0)
+  /**
+   * True while the displayed session has a pending form. It is a memo so the
+   * marker timer and the rest timers only restart when the state flips, not
+   * every time a second form is added or removed.
+   */
+  const frozen = createMemo(() => askedForms().size > 0)
 
   let column = 0
   let direction: Direction = 1
@@ -157,7 +175,7 @@ export function Ducksay(props: {
    * has actually swum: the start-up pose is a rest too, and the user asked for
    * no bubble before the first lap.
    */
-  const resting = () => mode() === "rest" && hasSwum
+  const resting = () => mode() === "rest" && hasSwum && !frozen()
   /**
    * The bubble is shown for the whole rest: either the waiting dots, while the
    * answer is on its way, or the joke itself. The duck's rows and the section's
@@ -296,6 +314,15 @@ export function Ducksay(props: {
       }
     }
 
+    // The marker is drawn after the bubble because a pending form hides the
+    // bubble; doing it last also keeps a stale bubble from covering it if the
+    // two ever coincide. It takes the art's colour, as every content row does.
+    if (frozen()) {
+      const glyph = QUESTION_FRAMES[questionFrame()] ?? QUESTION_FRAMES[0]
+      const at = questionColumn(column, direction)
+      rows[QUESTION_ROW] = overlay(rows[QUESTION_ROW] ?? "", glyph, at)
+    }
+
     for (const [index, text] of lines.entries()) {
       if (text !== undefined) text.content = rows[index] ?? ""
     }
@@ -343,6 +370,97 @@ export function Ducksay(props: {
     })
   })
 
+  /**
+   * Form events follow the session the same way execution events do. Only the
+   * displayed session counts: `global` and another session's forms must not
+   * freeze the duck. Forms already open when the section mounts are read from
+   * the host, with a `sync` retry when the cache has not been filled yet.
+   */
+  createEffect(() => {
+    const data = props.data
+    const sessionID = props.sessionID
+    setAskedForms(new Set<string>())
+    if (data === undefined || sessionID === undefined) return
+
+    /**
+     * Adds or removes one form in the pending set without disturbing the
+     * others. A new set is returned only on an actual change, so repeated
+     * events do not wake every effect that reads the set.
+     */
+    const addAsked = (id: string) => {
+      setAskedForms((current) => {
+        if (current.has(id)) return current
+        const next = new Set(current)
+        next.add(id)
+        return next
+      })
+    }
+    /**
+     * Forms that closed while the list was being synced. They must not come
+     * back when the synced list arrives, or the duck would stay frozen over a
+     * form nobody is waiting for any more.
+     */
+    const closed = new Set<string>()
+    const removeAsked = (id: string) => {
+      closed.add(id)
+      setAskedForms((current) => {
+        if (!current.has(id)) return current
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
+
+    const mine = (eventSessionID: string | undefined) => eventSessionID === sessionID
+    const stops = [
+      data.on("form.created", (event) => {
+        const form = event.data.form
+        if (!mine(form.sessionID)) return
+        closed.delete(form.id)
+        addAsked(form.id)
+      }),
+      data.on("form.replied", (event) => {
+        if (!mine(event.data.sessionID)) return
+        removeAsked(event.data.id)
+      }),
+      data.on("form.cancelled", (event) => {
+        if (!mine(event.data.sessionID)) return
+        removeAsked(event.data.id)
+      }),
+    ]
+
+    const forms = data.session?.form
+    if (forms !== undefined) {
+      const apply = (listed: readonly { id: string; sessionID?: string }[] | undefined) => {
+        if (props.sessionID !== sessionID || listed === undefined) return
+        setAskedForms((current) => {
+          const next = new Set<string>()
+          // The list is asked for one session, but the filter keeps the rule
+          // in one place: only a form of the displayed session is a question.
+          for (const form of listed) {
+            if (form.sessionID !== undefined && !mine(form.sessionID)) continue
+            if (!closed.has(form.id)) next.add(form.id)
+          }
+          for (const id of current) if (!closed.has(id)) next.add(id)
+          return next
+        })
+      }
+      const listed = forms.list(sessionID)
+      if (listed !== undefined) {
+        apply(listed)
+      } else {
+        void forms
+          .sync(sessionID)
+          .then(() => apply(forms.list(sessionID)))
+          .catch(() => {})
+      }
+    }
+
+    onCleanup(() => {
+      for (const stop of stops) stop()
+    })
+  })
+
   // Reading `busy` here is what makes the mode follow the session: a busy
   // session starts the swim, an idle one turns a swim into a dock. Any other
   // transition leaves the mode alone, so a session that goes busy again
@@ -357,31 +475,14 @@ export function Ducksay(props: {
     request = undefined
   }
 
-  // A request belongs to the end of a turn, not to the rest pose: it starts
-  // while the duck docks, so the bubble is usually ready by the time it stops.
-  // Reading `busy` alone is deliberate; `mode` changes during the dock and must
-  // not start a second request.
-  createEffect(() => {
-    const working = busy()
-    if (working === lastBusy) return
-    const wasBusy = lastBusy
-    lastBusy = working
-
-    if (props.joke === undefined) return
-    if (working) {
-      cancelJoke()
-      setJokeReady(false)
-      setJokeText(DEFAULT_BUBBLE_TEXT)
-      setDotsStep(0)
-      setShown(0)
-      return
-    }
-
-    // A duck that never moved — zero speed, or a lane narrower than the art —
-    // has no turn to joke about.
-    if (!wasBusy || !hasSwum) return
-
+  /**
+   * Starts the request for the turn that has just ended. A duck that never
+   * moved has no turn to joke about; a missing generator means the static
+   * `bubbleText` is all this section shows.
+   */
+  const startJoke = () => {
     const joke = props.joke
+    if (joke === undefined || !hasSwum) return
     cancelJoke()
     setJokeReady(false)
     setJokeText(DEFAULT_BUBBLE_TEXT)
@@ -400,6 +501,57 @@ export function Ducksay(props: {
       setShown(1)
       setJokeReady(true)
     })
+  }
+
+  // A request belongs to the end of a turn, not to the rest pose: it starts
+  // while the duck docks, so the bubble is usually ready by the time it stops.
+  // Reading `busy` alone is deliberate; `mode` changes during the dock and must
+  // not start a second request.
+  createEffect(() => {
+    const working = busy()
+    if (working === lastBusy) return
+    const wasBusy = lastBusy
+    lastBusy = working
+
+    if (props.joke === undefined) return
+    if (working) {
+      // A new turn replaces the turn before it: the pending request is
+      // aborted and the new turn asks for its own joke when it ends.
+      setOwed(false)
+      cancelJoke()
+      setJokeReady(false)
+      setJokeText(DEFAULT_BUBBLE_TEXT)
+      setDotsStep(0)
+      setShown(0)
+      return
+    }
+
+    // A duck that never moved — zero speed, or a lane narrower than the art —
+    // has no turn to joke about.
+    if (!wasBusy || !hasSwum) return
+    // The turn is over and owes a joke. Whether the request starts now is
+    // decided by the effect below.
+    setOwed(true)
+  })
+
+  // The request starts when the turn that owes it is over and nothing waits
+  // for an answer: a pending form holds it back until the last one closes, and
+  // a session that has become busy again holds it back until its own turn ends.
+  createEffect(() => {
+    const waiting = frozen()
+    const working = busy()
+    if (!owed()) return
+    if (waiting || working) return
+    if (!hasSwum) {
+      setOwed(false)
+      return
+    }
+    setOwed(false)
+    // A request already in flight is the request of this turn. It is not
+    // cancelled because a form appeared, and its answer is used when the form
+    // closes — so the debt is paid by that request, not by a second one.
+    if (request !== undefined) return
+    startJoke()
   })
 
   onCleanup(cancelJoke)
@@ -412,8 +564,21 @@ export function Ducksay(props: {
     jokeText()
     dotsStep()
     shown()
+    questionFrame()
+    frozen()
     paint()
     props.renderer?.requestRender()
+  })
+
+  // The marker is the only thing moving while a form waits. It starts at `?`
+  // when the first form arrives and keeps its own phase until the last form
+  // closes; `frozen` is a memo, so a second form does not restart the cycle.
+  createEffect(() => {
+    if (!frozen() || props.renderer === undefined) return
+    setQuestionFrame(0)
+    const tick = () => setQuestionFrame((frame) => (frame + 1) % QUESTION_FRAMES.length)
+    const stop = (props.schedule ?? defaultSchedule)(tick, QUESTION_FRAME_MS)
+    onCleanup(stop)
   })
 
   // The waiting dots run only while the duck rests with an answer still on the
@@ -482,16 +647,21 @@ export function Ducksay(props: {
     const renderer = props.renderer
     const swimSpeed = props.swimSpeed ?? DEFAULT_SWIM_SPEED
     // Reading `mode` here is what re-runs this effect when the duck starts or
-    // stops, so the timer is started and cleared with the animation.
-    if (renderer === undefined || swimSpeed <= 0 || mode() === "rest") return
+    // stops, so the timer is started and cleared with the animation. `frozen`
+    // is read for the same reason: a pending form stops the heartbeat
+    // altogether, so the section keeps only the marker's timer while the
+    // question waits, and the swim resumes from the same column afterwards.
+    if (renderer === undefined || swimSpeed <= 0 || mode() === "rest" || frozen()) return
 
     let accumulated = 0
 
     const tick = () => {
       // A tick that arrives after the duck came to rest moves nothing: the
       // timer is cleared as soon as the mode changes, but a tick already in
-      // flight still runs, and nothing should happen to a resting duck.
-      if (mode() === "rest") return
+      // flight still runs, and nothing should happen to a resting duck. A
+      // pending form freezes the same way: the current column and heading stay
+      // put until the form closes.
+      if (mode() === "rest" || frozen()) return
 
       // The water rides the duck's tick, one phase step per tick, at the tempo
       // derived from the swim speed. `waveSpeed` is zero both when the speed is

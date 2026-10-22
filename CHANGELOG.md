@@ -19,6 +19,16 @@
   punctuation, and always stops open on the last word.
 - The bubble is 29 columns wide with a 25-column text field. Text wraps by word into up to five lines, a longer word is
   broken, and a message that does not fit ends with `…`.
+- A marker above the duck's beak while the session waits for an answer to a question: `?`, `!`, `⸮`, `!`, changing every
+  300 ms. It stands exactly over the bracket next to the beak and keeps its column while the frames change.
+- The duck stops while a question of the shown session is open: the water stops with it, the bubble is hidden and the beak
+  is closed. When the question closes, the duck continues from the same column, direction and water phase, and the joke
+  picks up from the same ellipsis or word.
+- The marker shows before the first swim as well, and at `swimSpeed: 0` it is the only thing that moves.
+- Only a question of the session shown in the panel counts: permission requests and the assistant's own questions leave the
+  duck alone.
+- While a question is open the duck does not ask for a new joke. A request already on its way is not cancelled because of the
+  question, and a turn that ended during a question asks for its joke once the question closes and the session is free.
 
 ### Changed
 

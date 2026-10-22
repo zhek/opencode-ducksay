@@ -18,6 +18,7 @@ const Conditional = Show as unknown as (props: {
 }) => unknown
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
+import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
 import { Ducksay, type DuckSprites } from "../src/tui.tsx"
@@ -77,12 +78,62 @@ function facesRight(frame: string): boolean {
   return RIGHT_MARKERS.some((marker) => frame.includes(marker))
 }
 
+/** A question marker found in a captured frame. */
+interface FoundMarker {
+  readonly glyph: string
+  readonly row: number
+  readonly column: number
+}
+
+/**
+ * Finds the marker above the duck. The bubble is hidden while a form waits, so
+ * the only `?`, `!` or `⸮` in the frame is the marker.
+ */
+function questionMarker(frame: string): FoundMarker | undefined {
+  const rows = frame.split("\n")
+  for (const [row, line] of rows.entries()) {
+    for (const glyph of ["⸮", "?", "!"]) {
+      const column = line.indexOf(glyph)
+      if (column >= 0) return { glyph, row, column }
+    }
+  }
+  return undefined
+}
+
+/** The column the marker must occupy for the duck in this frame. */
+function expectedMarkerColumn(frame: string): number {
+  return columnOf(frame) + (facesRight(frame) ? DUCK_WIDTH - 2 : 1)
+}
+
+/** A form the fake host already has when the section mounts. */
+interface PendingForm {
+  readonly id: string
+  /** Defaults to the mounted session; pass another id to seed a foreign form. */
+  readonly sessionID?: string
+}
+
+/** Lets promise callbacks and the repaint effect run. */
+async function flushEffects() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve()
+}
+
 interface Harness {
   readonly renderer: CliRenderer
   /** Heartbeats the section currently holds; zero once the duck is at rest. */
   readonly activeTimers: () => number
   readonly liveRequests: () => number
   readonly setRunning: (value: boolean) => void
+  /**
+   * Switches the displayed session. The prop is a getter, so the section sees
+   * the new id the way a host that re-renders the sidebar would.
+   */
+  readonly setSession: (sessionID: string) => void
+  /** Emits one host event through the same subscription the section uses. */
+  readonly emit: (type: string, event: unknown) => void
+  /** Form events for the mounted session unless another session is passed. */
+  readonly formCreated: (id: string, sessionID?: string) => void
+  readonly formReplied: (id: string, sessionID?: string) => void
+  readonly formCancelled: (id: string, sessionID?: string) => void
   /** Paints one frame and returns it. */
   readonly frame: () => Promise<string>
   /** The same frame with colours, for checking what a row was drawn in. */
@@ -113,13 +164,37 @@ interface MountOptions {
   sprites?: DuckSprites
   bubbleText?: string
   joke?: (signal: AbortSignal) => Promise<string | undefined>
+  sessionID?: string
+  pendingForms?: readonly PendingForm[]
+  /**
+   * When false, the first `form.list` call returns `undefined`, so the section
+   * has to call `sync` and read the list again.
+   */
+  formsReady?: boolean
 }
 
 async function mount(options: MountOptions = {}): Promise<Harness> {
   const clock = new ManualClock()
   const handlers = new Map<string, (event: unknown) => void>()
+  const [session, setSession] = createSignal(options.sessionID ?? SESSION)
+  const forms = new Map<string, { id: string; sessionID: string }[]>()
+  for (const form of options.pendingForms ?? []) {
+    const sessionID = form.sessionID ?? session()
+    const list = forms.get(sessionID) ?? []
+    list.push({ id: form.id, sessionID })
+    forms.set(sessionID, list)
+  }
+  let formsReady = options.formsReady ?? true
   let setRunning = (_value: boolean) => {}
   let activeTimers = 0
+
+  const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
+  const formCreated = (id: string, sessionID = session()) =>
+    emit("form.created", { data: { form: { id, sessionID, title: "Question", fields: [] } } })
+  const formReplied = (id: string, sessionID = session()) =>
+    emit("form.replied", { data: { id, sessionID, answer: {} } })
+  const formCancelled = (id: string, sessionID = session()) =>
+    emit("form.cancelled", { data: { id, sessionID } })
 
   const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
   const [mounted, setMounted] = createSignal(true)
@@ -130,10 +205,18 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
           handlers.set(type, handler)
           return () => handlers.delete(type)
         },
+        session: {
+          form: {
+            list: (sessionID: string) => (formsReady ? (forms.get(sessionID) ?? []) : undefined),
+            sync: async (_sessionID: string) => {
+              formsReady = true
+            },
+          },
+        },
       } as unknown as Data
       setRunning = (value: boolean) => {
-        handlers.get("session.execution.started")?.({ data: { sessionID: SESSION } })
-        if (!value) handlers.get("session.execution.succeeded")?.({ data: { sessionID: SESSION } })
+        handlers.get("session.execution.started")?.({ data: { sessionID: session() } })
+        if (!value) handlers.get("session.execution.succeeded")?.({ data: { sessionID: session() } })
       }
       // `Show` is created manually because Bun's JSX transform evaluates props
       // once: a getter is the only way to make the conditional reactive. It
@@ -145,27 +228,31 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
           return mounted()
         },
         get children() {
-          return (_shown: boolean) => (
-            <Ducksay
-              primary={PRIMARY}
-              renderer={setup.renderer}
-              swimSpeed={options.swimSpeed ?? 12}
-              data={data}
-              sessionID={SESSION}
-              isRunning={() => options.running === true}
-              schedule={(tick, ms) => {
+          return (_shown: boolean) =>
+            // The section is created by hand for the same reason: the session
+            // id has to be a getter, so the tests can switch the session the
+            // way a host that re-renders the sidebar would.
+            createComponent(Ducksay, {
+              primary: PRIMARY,
+              renderer: setup.renderer,
+              swimSpeed: options.swimSpeed ?? 12,
+              data,
+              get sessionID() {
+                return session()
+              },
+              isRunning: () => options.running === true,
+              schedule: (tick: () => void, ms: number) => {
                 activeTimers += 1
                 const handle = clock.setInterval(tick, ms)
                 return () => {
                   clock.clearInterval(handle)
                   activeTimers -= 1
                 }
-              }}
-              sprites={options.sprites}
-              bubbleText={options.bubbleText}
-              joke={options.joke}
-            />
-          )
+              },
+              sprites: options.sprites,
+              bubbleText: options.bubbleText,
+              joke: options.joke,
+            })
         },
       })
     },
@@ -196,6 +283,11 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     activeTimers: () => activeTimers,
     liveRequests: () => setup.renderer.liveRequestCount,
     setRunning,
+    setSession,
+    emit,
+    formCreated,
+    formReplied,
+    formCancelled,
     frame,
     advance,
     // Frames of 100 ms, which is the pace a real frame loop would deliver at
@@ -442,6 +534,417 @@ describe("animation timers", () => {
   // does not run cleanups. The live check covers a hidden sidebar instead; the
   // cleanup path itself is covered by the test above, which tears the timer down
   // through the same `onCleanup`.
+})
+
+describe("question marker", () => {
+  const rowOf = (frame: string, needle: string) =>
+    frame.split("\n").findIndex((row) => row.includes(needle))
+
+  /** The rows carrying water; the marker and duck never contain a tilde. */
+  const waterRows = (frame: string) => frame.split("\n").filter((row) => row.includes("~"))
+
+  /** Rests the duck against `wall`, returning the frame with its bubble. */
+  async function restAt(wall: "left" | "right", options: MountOptions = {}) {
+    const harness = await mount({ running: true, ...options })
+    if (wall === "left") {
+      await harness.tick(RIGHT_EDGE + 3)
+    } else {
+      await harness.advance(COLUMN_MS * 3)
+    }
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  /** Rests with a request that has not answered yet. */
+  async function restWithJoke(
+    joke: (signal: AbortSignal) => Promise<string | undefined>,
+    options: MountOptions = {},
+  ) {
+    const harness = await mount({ running: true, joke, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    let frame = ""
+    for (let step = 0; step < (RIGHT_EDGE + 2) * 4; step += 1) {
+      frame = await harness.advance(TICK_MS)
+      if (frame.includes("╭")) break
+    }
+    return { harness, frame }
+  }
+
+  test("freezes at the first question with ? over the bracket", async () => {
+    const harness = await mount()
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+
+    const marker = questionMarker(frame)
+    expect(marker?.glyph).toBe("?")
+    expect(marker?.column).toBe(expectedMarkerColumn(frame))
+    expect(marker?.row).toBe(rowOf(frame, HEAD) - 1)
+    expect(frame).not.toContain("╭")
+    expect(harness.activeTimers()).toBe(1)
+
+    await harness.dispose()
+  })
+
+  test("sits over the opening bracket of a left-facing duck", async () => {
+    const { harness, frame: resting } = await restAt("right")
+    expect(resting).toContain("╭")
+    expect(facesRight(resting)).toBe(false)
+
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+    const marker = questionMarker(frame)
+
+    expect(marker?.glyph).toBe("?")
+    expect(marker?.column).toBe(columnOf(frame) + 1)
+    expect(marker?.column).toBe(expectedMarkerColumn(frame))
+    expect(frame).toContain(FACING_LEFT)
+    expect(frame).not.toContain(FACING_LEFT_OPEN)
+    expect(frame).not.toContain("╭")
+    await harness.dispose()
+  })
+
+  test("sits over the closing bracket of a right-facing duck", async () => {
+    const { harness } = await restAt("left")
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+    const marker = questionMarker(frame)
+
+    expect(facesRight(frame)).toBe(true)
+    expect(marker?.column).toBe(columnOf(frame) + DUCK_WIDTH - 2)
+    expect(marker?.column).toBe(expectedMarkerColumn(frame))
+    expect(frame).not.toContain("╭")
+    await harness.dispose()
+  })
+
+  test("shows the marker before the first swim and at zero speed", async () => {
+    const harness = await mount({ swimSpeed: 0 })
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+
+    expect(questionMarker(frame)?.glyph).toBe("?")
+    expect(frame).not.toContain("╭")
+    expect(columnOf(frame)).toBe(0)
+    expect(harness.activeTimers()).toBe(1)
+
+    const next = await harness.advance(QUESTION_FRAME_MS)
+    expect(questionMarker(next)?.glyph).toBe("!")
+    expect(columnOf(next)).toBe(0)
+    await harness.dispose()
+  })
+
+  test("cycles ? -> ! -> ⸮ -> ! without moving its column", async () => {
+    const harness = await mount()
+    harness.formCreated("form-1")
+
+    const frames = [await harness.frame()]
+    const glyphs = [questionMarker(frames[0]!)?.glyph]
+    for (let index = 0; index < 4; index += 1) {
+      frames.push(await harness.advance(QUESTION_FRAME_MS))
+      glyphs.push(questionMarker(frames[frames.length - 1]!)?.glyph)
+    }
+
+    expect(glyphs).toEqual(["?", "!", "⸮", "!", "?"])
+    const columns = frames.map((frame) => questionMarker(frame)!.column)
+    expect(new Set(columns)).toEqual(new Set([columns[0]]))
+    await harness.dispose()
+  })
+
+  test("keeps the cycle running while a second form is open", async () => {
+    const harness = await mount()
+    harness.formCreated("form-1")
+    await harness.advance(QUESTION_FRAME_MS)
+    const before = await harness.frame()
+    expect(questionMarker(before)?.glyph).toBe("!")
+
+    harness.formCreated("form-2")
+    const still = await harness.frame()
+    expect(questionMarker(still)?.glyph).toBe("!")
+    expect(questionMarker(still)?.column).toBe(questionMarker(before)?.column)
+
+    const next = await harness.advance(QUESTION_FRAME_MS)
+    expect(questionMarker(next)?.glyph).toBe("⸮")
+
+    harness.formReplied("form-1")
+    expect(questionMarker(await harness.frame())?.glyph).toBe("⸮")
+    expect(harness.activeTimers()).toBe(1)
+
+    harness.formCancelled("form-2")
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("ignores forms of other sessions, global and permission requests", async () => {
+    const harness = await mount({ pendingForms: [{ id: "own" }] })
+    harness.formReplied("own")
+    await harness.frame()
+
+    harness.formCreated("other", "ses_other")
+    harness.formCreated("global", "global")
+    harness.emit("permission.asked", { data: { sessionID: SESSION } })
+
+    const frame = await harness.frame()
+    expect(questionMarker(frame)).toBeUndefined()
+    expect(harness.activeTimers()).toBe(0)
+
+    harness.formCreated("own")
+    expect(questionMarker(await harness.frame())?.glyph).toBe("?")
+    harness.formReplied("own")
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+    await harness.dispose()
+  })
+
+  test("removes the marker on reply and on cancellation", async () => {
+    for (const close of ["replied", "cancelled"] as const) {
+      const harness = await mount()
+      harness.formCreated("form-1")
+      expect(questionMarker(await harness.frame())?.glyph).toBe("?")
+
+      if (close === "replied") harness.formReplied("form-1")
+      else harness.formCancelled("form-1")
+
+      expect(questionMarker(await harness.frame())).toBeUndefined()
+      expect(harness.activeTimers()).toBe(0)
+      await harness.dispose()
+    }
+  })
+
+  test("a cancelled form leaves the duck exactly where a replied one does", async () => {
+    const frames: string[] = []
+    for (const close of ["replied", "cancelled"] as const) {
+      const harness = await mount({ running: true })
+      await harness.advance(COLUMN_MS * 4)
+      harness.formCreated("form-1")
+      const frozen = await harness.frame()
+      expect(questionMarker(frozen)).toBeDefined()
+
+      if (close === "replied") harness.formReplied("form-1")
+      else harness.formCancelled("form-1")
+      const resumed = await harness.frame()
+
+      expect(questionMarker(resumed)).toBeUndefined()
+      expect(columnOf(resumed)).toBe(columnOf(frozen))
+      expect(facesRight(resumed)).toBe(facesRight(frozen))
+      frames.push(resumed.split("\n").slice(5).join("\n"))
+      await harness.dispose()
+    }
+
+    // The duck's own rows are the same after an answer and after a cancel.
+    expect(frames[1]).toBe(frames[0])
+  })
+
+  test("reads forms that were already open when the section mounted", async () => {
+    const harness = await mount({ pendingForms: [{ id: "form-1" }] })
+    const frame = await harness.frame()
+
+    expect(questionMarker(frame)?.glyph).toBe("?")
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("syncs and reads again when the form cache has no list yet", async () => {
+    const harness = await mount({ pendingForms: [{ id: "form-1" }], formsReady: false })
+    await flushEffects()
+    const frame = await harness.frame()
+
+    expect(questionMarker(frame)?.glyph).toBe("?")
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("does not carry another session's forms into the mounted section", async () => {
+    const harness = await mount({ sessionID: "ses_other", pendingForms: [{ id: "form-1" }] })
+    const frame = await harness.frame()
+    expect(questionMarker(frame)?.glyph).toBe("?")
+
+    harness.formReplied("form-1", "ses_other")
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+
+    // A form of the previous session id must not freeze this one.
+    harness.formCreated("form-old", SESSION)
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+    await harness.dispose()
+  })
+
+  test("rebuilds the form set when the displayed session changes", async () => {
+    const harness = await mount({ pendingForms: [{ id: "form-1" }] })
+    expect(questionMarker(await harness.frame())?.glyph).toBe("?")
+
+    // The new session has no form of its own, so the marker goes away even
+    // though the old session's form is still open.
+    harness.setSession("ses_other")
+    await flushEffects()
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+
+    // A form of the new session freezes the duck, and the old session's form
+    // is ignored again.
+    harness.formCreated("form-2", "ses_other")
+    expect(questionMarker(await harness.frame())?.glyph).toBe("?")
+    harness.formReplied("form-1", SESSION)
+    expect(questionMarker(await harness.frame())?.glyph).toBe("?")
+    await harness.dispose()
+  })
+
+  test("freezes a swimming duck's column, heading and water", async () => {
+    const harness = await mount({ running: true })
+    const before = await harness.advance(COLUMN_MS * 4)
+    const column = columnOf(before)
+    const heading = facesRight(before)
+
+    harness.formCreated("form-1")
+    const frozen = await harness.frame()
+    const after = await harness.advance(1000)
+
+    expect(questionMarker(frozen)).toBeDefined()
+    expect(columnOf(after)).toBe(column)
+    expect(facesRight(after)).toBe(heading)
+    expect(waterRows(after)).toEqual(waterRows(frozen))
+    expect(columnOf(after)).toBeGreaterThan(0)
+    await harness.dispose()
+  })
+
+  test("freezes a docking duck and resumes the dock after the answer", async () => {
+    const harness = await mount({ running: true })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const docking = await harness.advance(TICK_MS * 3)
+    const column = columnOf(docking)
+    const heading = facesRight(docking)
+
+    harness.formCreated("form-1")
+    const frozen = await harness.frame()
+    expect(questionMarker(frozen)).toBeDefined()
+    expect(columnOf(await harness.advance(1000))).toBe(column)
+    expect(facesRight(await harness.frame())).toBe(heading)
+
+    harness.formReplied("form-1")
+    const resumed = await harness.advance(TICK_MS * 3)
+    expect(columnOf(resumed)).not.toBe(column)
+    await harness.dispose()
+  })
+
+  test("pauses the waiting dots and resumes from the same frame", async () => {
+    const joke = () => new Promise<string | undefined>(() => {})
+    const { harness, frame: resting } = await restWithJoke(joke)
+    const dots = resting.match(/Quack\.*/)?.[0]
+    expect(dots).toBeDefined()
+    expect(harness.activeTimers()).toBe(1)
+
+    harness.formCreated("form-1")
+    const paused = await harness.advance(1000)
+    expect(paused).not.toContain("Quack")
+    expect(questionMarker(paused)).toBeDefined()
+    expect(harness.activeTimers()).toBe(1)
+
+    harness.formReplied("form-1")
+    const resumed = await harness.frame()
+    expect(resumed).toContain(dots!)
+    expect(resumed).toContain("╭")
+    await harness.dispose()
+  })
+
+  test("pauses typing without losing the word already on screen", async () => {
+    const joke = async () => "One two three"
+    const { harness, frame } = await restWithJoke(joke)
+    expect(frame).toContain("One")
+    expect(frame).not.toContain("two")
+
+    harness.formCreated("form-1")
+    const paused = await harness.advance(WORD_FRAME_MS * 4)
+    expect(paused).not.toContain("╭")
+    expect(paused).not.toContain("One")
+    expect(questionMarker(paused)).toBeDefined()
+
+    harness.formReplied("form-1")
+    const resumed = await harness.frame()
+    expect(resumed).toContain("One")
+    expect(resumed).not.toContain("two")
+
+    const next = await harness.advance(WORD_FRAME_MS)
+    expect(next).toContain("One two")
+    await harness.dispose()
+  })
+
+  test("draws the marker in the art's colour and keeps the section's height", async () => {
+    const harness = await mount()
+    const before = await harness.frame()
+    const height = before.split("\n").length
+    const head = rowOf(before, HEAD)
+
+    harness.formCreated("form-1")
+    await harness.frame()
+    const spans = harness.spans()
+    const frame = await harness.frame()
+    const marker = questionMarker(frame)!
+
+    const colourOf = (needle: string) => {
+      for (const line of spans.lines) {
+        for (const span of line.spans) {
+          if (span.text.includes(needle)) return span.fg
+        }
+      }
+      return undefined
+    }
+    const art = colourOf(FACING_RIGHT)
+    const question = colourOf(marker.glyph)
+    expect(art).toBeDefined()
+    expect(question).toBeDefined()
+    expect(question!.equals(art!)).toBe(true)
+    expect(frame.split("\n").length).toBe(height)
+    expect(rowOf(frame, HEAD)).toBe(head)
+    expect(marker.row).toBe(head - 1)
+    await harness.dispose()
+  })
+
+  test("keeps only the marker timer while a form waits", async () => {
+    const harness = await mount({ running: true })
+    await harness.advance(COLUMN_MS * 2)
+    expect(harness.activeTimers()).toBe(1)
+
+    harness.formCreated("form-1")
+    const frozen = await harness.frame()
+    expect(questionMarker(frozen)).toBeDefined()
+    // The swim heartbeat is gone; the marker's timer is the only one left.
+    expect(harness.activeTimers()).toBe(1)
+
+    const next = await harness.advance(QUESTION_FRAME_MS)
+    expect(questionMarker(next)?.glyph).toBe("!")
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("drops every timer when the section is unmounted during a question", async () => {
+    const harness = await mount({ running: true })
+    await harness.advance(COLUMN_MS * 2)
+    harness.formCreated("form-1")
+    await harness.frame()
+    expect(harness.activeTimers()).toBe(1)
+
+    await harness.unmount()
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("does not throw in a lane narrower than the art", async () => {
+    const harness = await mount({ running: true, width: DUCK_WIDTH - 2 })
+    await harness.advance(COLUMN_MS * 3)
+    const swimTimers = harness.activeTimers()
+    harness.formCreated("form-1")
+
+    const frame = await harness.frame()
+    expect(frame).toContain(DUCK_RIGHT[1].slice(0, DUCK_WIDTH - 2))
+    expect(harness.activeTimers()).toBe(1)
+
+    const later = await harness.advance(1000)
+    expect(later).toContain(DUCK_RIGHT[1].slice(0, DUCK_WIDTH - 2))
+    harness.formReplied("form-1")
+    await harness.frame()
+    expect(questionMarker(await harness.frame())).toBeUndefined()
+    expect(harness.activeTimers()).toBe(swimTimers)
+    await harness.dispose()
+  })
 })
 
 describe("water", () => {
@@ -1140,6 +1643,81 @@ describe("generated joke", () => {
     pending.calls[0]!.resolve("One joke")
     await settle()
     await harness.frame()
+    expect(pending.calls).toHaveLength(1)
+    await harness.dispose()
+  })
+
+  test("does not cancel a request already in flight when a form appears", async () => {
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke)
+    expect(pending.calls).toHaveLength(1)
+    const call = pending.calls[0]!
+
+    harness.formCreated("form-1")
+    await harness.advance(THINK_FRAME_MS * 3)
+    expect(call.signal.aborted).toBe(false)
+    expect(pending.calls).toHaveLength(1)
+
+    call.resolve("One joke")
+    await settle()
+    const hidden = await harness.frame()
+    expect(hidden).not.toContain("╭")
+    expect(hidden).not.toContain("One joke")
+
+    harness.formReplied("form-1")
+    const shown = await harness.frame()
+    expect(shown).toContain("╭")
+    expect(shown).toContain("One")
+    expect(pending.calls).toHaveLength(1)
+    await harness.dispose()
+  })
+
+  test("defers the joke of a turn that ended while a form was waiting", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, joke: pending.joke })
+    await harness.advance(COLUMN_MS * 3)
+
+    harness.formCreated("form-1")
+    harness.setRunning(false)
+    await harness.tick(RIGHT_EDGE + 2)
+    expect(pending.calls).toHaveLength(0)
+
+    harness.formReplied("form-1")
+    await settle()
+    await harness.frame()
+    expect(pending.calls).toHaveLength(1)
+
+    pending.calls[0]!.resolve("Deferred joke")
+    await settle()
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    expect(frame).toContain("Deferred")
+    await harness.dispose()
+  })
+
+  test("keeps the deferred joke until the last form and the next turn's end", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, joke: pending.joke })
+    await harness.advance(COLUMN_MS * 3)
+
+    harness.formCreated("form-1")
+    harness.formCreated("form-2")
+    harness.setRunning(false)
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+
+    harness.formReplied("form-1")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+
+    // The session starts another turn before the second form closes. The
+    // deferred request must wait for that turn to end as well.
+    harness.setRunning(true)
+    harness.formReplied("form-2")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+
+    harness.setRunning(false)
+    await settle()
     expect(pending.calls).toHaveLength(1)
     await harness.dispose()
   })
