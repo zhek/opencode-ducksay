@@ -43,6 +43,12 @@
 - The joke request runs in a temporary empty session created with the current session's model, so only the recent messages
   and metadata go to the model; the rest of the session history is not sent.
 
+### Fixed
+
+- The duck keeps its column, heading, water phase and rest bubble when the sidebar is rebuilt, for example after switching
+  to another session and back, instead of starting again from the left edge; an open question keeps its marker over the
+  same column.
+
 ## [1.2.0] — 2026-10-18
 
 The duck now swims on water.

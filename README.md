@@ -60,6 +60,10 @@ Nothing is lost while the duck waits. The joke keeps the frame it had — the sa
 question closes the duck carries on from the same column, in the same direction, with the water at the same phase. If the
 session is still working, it swims on; if the turn has ended, it swims to the edge and rests as usual.
 
+The same holds when the panel is rebuilt, for example after switching to another session and back: the duck returns to
+the column, heading and water phase it had, and an open question keeps its marker over the same spot. A finished rest
+bubble comes back with the same words.
+
 The marker shows even before the first swim, and at `swimSpeed: 0` it is the only thing that moves. Only a question of the
 session shown in the panel counts: permission requests and the assistant's own questions leave the duck alone.
 

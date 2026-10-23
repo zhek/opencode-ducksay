@@ -18,6 +18,7 @@ const Conditional = Show as unknown as (props: {
 }) => unknown
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
+import { createDuckStates, type DuckStates } from "../src/duck-state.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
@@ -171,6 +172,11 @@ interface MountOptions {
    * has to call `sync` and read the list again.
    */
   formsReady?: boolean
+  /**
+   * State shared between mounts. Passing one is what a rebuilt sidebar does;
+   * leaving it out gives every mount its own fresh duck.
+   */
+  states?: DuckStates
 }
 
 async function mount(options: MountOptions = {}): Promise<Harness> {
@@ -189,12 +195,24 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
   let activeTimers = 0
 
   const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
-  const formCreated = (id: string, sessionID = session()) =>
+  const removeForm = (id: string, sessionID: string) => {
+    const list = forms.get(sessionID) ?? []
+    forms.set(sessionID, list.filter((form) => form.id !== id))
+  }
+  const formCreated = (id: string, sessionID = session()) => {
+    const list = forms.get(sessionID) ?? []
+    if (!list.some((form) => form.id === id)) list.push({ id, sessionID })
+    forms.set(sessionID, list)
     emit("form.created", { data: { form: { id, sessionID, title: "Question", fields: [] } } })
-  const formReplied = (id: string, sessionID = session()) =>
+  }
+  const formReplied = (id: string, sessionID = session()) => {
+    removeForm(id, sessionID)
     emit("form.replied", { data: { id, sessionID, answer: {} } })
-  const formCancelled = (id: string, sessionID = session()) =>
+  }
+  const formCancelled = (id: string, sessionID = session()) => {
+    removeForm(id, sessionID)
     emit("form.cancelled", { data: { id, sessionID } })
+  }
 
   const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
   const [mounted, setMounted] = createSignal(true)
@@ -252,6 +270,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
               sprites: options.sprites,
               bubbleText: options.bubbleText,
               joke: options.joke,
+              states: options.states,
             })
         },
       })
@@ -305,6 +324,17 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     },
     dispose: () => setup.dispose(),
   }
+}
+
+/**
+ * Tears the section down and mounts a fresh one over the same state store,
+ * which is what OpenCode does when it rebuilds the sidebar for another session
+ * and then comes back.
+ */
+async function rebuild(previous: Harness, options: MountOptions): Promise<Harness> {
+  await previous.unmount()
+  await previous.dispose()
+  return mount(options)
 }
 
 describe("Ducksay section", () => {
@@ -498,6 +528,87 @@ describe("swimming", () => {
       expect(columnOf(frame)).toBeGreaterThanOrEqual(0)
       expect(columnOf(frame)).toBeLessThanOrEqual(RIGHT_EDGE)
     }
+  })
+})
+
+describe("rebuilding the section", () => {
+  test("puts the duck back where it was after the sidebar is rebuilt", async () => {
+    // Regression: OpenCode rebuilds the sidebar when the displayed session
+    // changes, which used to send the duck back to the start on return.
+    const states = createDuckStates()
+    const harness = await mount({ running: true, states })
+    const before = await harness.tick(5)
+    const column = columnOf(before)
+    const heading = facesRight(before)
+    expect(column).toBeGreaterThan(0)
+
+    const rebuilt = await rebuild(harness, { running: true, states })
+    const after = await rebuilt.frame()
+
+    expect(columnOf(after)).toBe(column)
+    expect(facesRight(after)).toBe(heading)
+    expect(after.split("\n").filter((row) => row.includes("~")))
+      .toEqual(before.split("\n").filter((row) => row.includes("~")))
+    await rebuilt.dispose()
+  })
+
+  test("keeps a waiting question over the same column across a rebuild", async () => {
+    const states = createDuckStates()
+    const harness = await mount({ running: true, states })
+    await harness.advance(COLUMN_MS * 4)
+    harness.formCreated("form-1")
+    const frozen = await harness.frame()
+    const column = columnOf(frozen)
+    const heading = facesRight(frozen)
+    const marker = questionMarker(frozen)
+    expect(column).toBeGreaterThan(0)
+    expect(marker).toBeDefined()
+
+    const rebuilt = await rebuild(harness, {
+      running: true,
+      states,
+      pendingForms: [{ id: "form-1" }],
+    })
+    const after = await rebuilt.frame()
+
+    expect(columnOf(after)).toBe(column)
+    expect(facesRight(after)).toBe(heading)
+    expect(questionMarker(after)?.glyph).toBe("?")
+    expect(questionMarker(after)?.column).toBe(column + (heading ? DUCK_WIDTH - 2 : 1))
+    await rebuilt.dispose()
+  })
+
+  test("does not bring back a question answered before the rebuild", async () => {
+    const states = createDuckStates()
+    const harness = await mount({ running: true, states })
+    await harness.advance(COLUMN_MS * 4)
+    harness.formCreated("form-1")
+    expect(questionMarker(await harness.frame())).toBeDefined()
+
+    harness.formReplied("form-1")
+    const closed = await harness.frame()
+    expect(questionMarker(closed)).toBeUndefined()
+
+    const rebuilt = await rebuild(harness, { running: true, states })
+    expect(questionMarker(await rebuilt.frame())).toBeUndefined()
+    await rebuilt.dispose()
+  })
+
+  test("keeps each session's place apart", async () => {
+    const states = createDuckStates()
+    const first = await mount({ running: true, states, sessionID: "ses_one" })
+    const column = columnOf(await first.tick(5))
+    expect(column).toBeGreaterThan(0)
+
+    const second = await rebuild(first, { running: false, states, sessionID: "ses_two" })
+    const frame = await second.frame()
+
+    expect(columnOf(frame)).toBe(0)
+    expect(facesRight(frame)).toBe(true)
+
+    const back = await rebuild(second, { running: false, states, sessionID: "ses_one" })
+    expect(columnOf(await back.frame())).toBe(column)
+    await back.dispose()
   })
 })
 
@@ -1370,6 +1481,64 @@ describe("generated joke", () => {
     expect(await harness.frame()).toContain("One joke")
     expect(harness.activeTimers()).toBe(0)
     await harness.dispose()
+  })
+
+  test("keeps the finished joke and the rest pose across a rebuild", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke, { states })
+    pending.calls[0]!.resolve("One joke")
+    await settle()
+    await harness.advance(WORD_FRAME_MS * 3)
+    const before = await harness.frame()
+    expect(before).toContain("One joke")
+    expect(before).not.toContain("Quack.")
+
+    const rebuilt = await rebuild(harness, { running: false, states, joke: pending.joke })
+    const after = await rebuilt.frame()
+
+    expect(after).toContain("One joke")
+    expect(after).not.toContain("Quack.")
+    expect(after.includes(FACING_LEFT_OPEN) || after.includes(FACING_RIGHT_OPEN)).toBe(true)
+    await rebuilt.dispose()
+  })
+
+  test("asks again when a rebuild interrupts the request", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke, { states })
+    expect(pending.calls).toHaveLength(1)
+
+    const rebuilt = await rebuild(harness, { running: false, states, joke: pending.joke })
+
+    // The old request is cancelled with the section, so the new one has to ask
+    // again; otherwise the bubble would wait for an answer that never comes.
+    expect(pending.calls[0]!.signal.aborted).toBe(true)
+    expect(pending.calls).toHaveLength(2)
+    pending.calls[1]!.resolve("Rebuilt joke")
+    await settle()
+    const after = await rebuilt.advance(WORD_FRAME_MS * 3)
+    expect(after).toContain("Rebuilt joke")
+    expect(after).toContain("╭")
+    await rebuilt.dispose()
+  })
+
+  test("keeps the waiting dots frame across a rebuild", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const { harness } = await restWithJoke(pending.joke, { states })
+    const two = await harness.advance(THINK_FRAME_MS)
+    expect(two).toContain("Quack..")
+    expect(two).not.toContain("Quack...")
+
+    const rebuilt = await rebuild(harness, { running: false, states, joke: pending.joke })
+    const after = await rebuilt.frame()
+
+    expect(after).toContain("Quack..")
+    expect(after).not.toContain("Quack...")
+    pending.calls[1]!.resolve("Later joke")
+    await settle()
+    await rebuilt.dispose()
   })
 
   test("drops the waiting bubble when the duck swims again", async () => {

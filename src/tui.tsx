@@ -11,8 +11,15 @@ import {
   type BubbleSide,
 } from "./bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
+import {
+  createDuckState,
+  createDuckStates,
+  type DuckState,
+  type DuckStates,
+  type Mode,
+} from "./duck-state.ts"
 import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
-import { laneLimit, msPerColumn, moveTowardsEdge, type Direction } from "./lane.ts"
+import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSwimSpeed } from "./options.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
@@ -26,14 +33,6 @@ import {
   thinkingText,
 } from "./thinking.ts"
 import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
-
-/**
- * What the duck is doing. `rest` is the only state without a travel timer, and
- * it is also the pose a reader expects to see: the duck parked at a lane edge,
- * nose pointing at the middle of the lane. The waiting and typing animations
- * are rest-only timers of their own.
- */
-type Mode = "rest" | "swim" | "dock"
 
 export interface DuckSprites {
   readonly right: readonly string[]
@@ -132,25 +131,43 @@ export function Ducksay(props: {
    * `bubbleText`, which is what the geometry tests use.
    */
   joke?: (signal: AbortSignal) => Promise<string | undefined>
+  /**
+   * Per-session state that outlives this component. The plugin hands in one
+   * store for its whole lifetime, so a session whose sidebar was rebuilt gets
+   * its duck back in the same place. Without it the section keeps its state for
+   * the current mount only, which is what the static rendering tests use.
+   */
+  states?: DuckStates
 }) {
-  const [mode, setMode] = createSignal<Mode>("rest")
+  const stored = props.states !== undefined && props.sessionID !== undefined
+    ? props.states.get(props.sessionID)
+    : undefined
+  const state: DuckState = stored ?? createDuckState({
+    // A static bubble is ready immediately. A generated one starts hidden and
+    // becomes ready only when an answer or the fallback arrives.
+    jokeReady: props.joke === undefined,
+    jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
+  })
+  if (stored === undefined && props.states !== undefined && props.sessionID !== undefined) {
+    props.states.set(props.sessionID, state)
+  }
+
+  const [mode, setMode] = createSignal<Mode>(state.mode)
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
-  // A static bubble is ready immediately. A generated one starts hidden and
-  // becomes ready only when an answer or the fallback arrives.
-  const [jokeReady, setJokeReady] = createSignal(props.joke === undefined)
-  const [jokeText, setJokeText] = createSignal(props.bubbleText ?? DEFAULT_BUBBLE_TEXT)
+  const [jokeReady, setJokeReady] = createSignal(state.jokeReady)
+  const [jokeText, setJokeText] = createSignal(state.jokeText)
   // Index into `THINKING_STEPS`: which frame of the waiting dots is on screen.
-  const [dotsStep, setDotsStep] = createSignal(0)
+  const [dotsStep, setDotsStep] = createSignal(state.dotsStep)
   // How many words of the joke have been shown. The answer sets it to `1`, so
   // the first word replaces the waiting dots without an empty frame.
-  const [shown, setShown] = createSignal(0)
+  const [shown, setShown] = createSignal(state.shown)
   // Forms of this session that are still waiting for an answer. A set rather
   // than a counter so a repeated event for one form cannot keep the marker up
   // after that form is gone.
   const [askedForms, setAskedForms] = createSignal<ReadonlySet<string>>(new Set())
   // A turn that has ended and still owes a joke. The request waits while a
   // form of the session is open, or while the session is busy again.
-  const [owed, setOwed] = createSignal(false)
+  const [owed, setOwed] = createSignal(state.owed)
   // The marker frame starts at `?` and advances while at least one form waits.
   const [questionFrame, setQuestionFrame] = createSignal(0)
   /**
@@ -160,11 +177,7 @@ export function Ducksay(props: {
    */
   const frozen = createMemo(() => askedForms().size > 0)
 
-  let column = 0
-  let direction: Direction = 1
   let laneBox: BoxRenderable | undefined
-  let wavePhase = 0
-  let hasSwum = false
   let lastBusy = busy()
   let request: JokeRequest | undefined
   const lines: (TextRenderable | undefined)[] = []
@@ -175,7 +188,7 @@ export function Ducksay(props: {
    * has actually swum: the start-up pose is a rest too, and the user asked for
    * no bubble before the first lap.
    */
-  const resting = () => mode() === "rest" && hasSwum && !frozen()
+  const resting = () => mode() === "rest" && state.hasSwum && !frozen()
   /**
    * The bubble is shown for the whole rest: either the waiting dots, while the
    * answer is on its way, or the joke itself. The duck's rows and the section's
@@ -207,7 +220,7 @@ export function Ducksay(props: {
   }
   const art = () => {
     const set = sprites()
-    if (direction === 1) return beakOpen() ? set.rightOpen : set.right
+    if (state.direction === 1) return beakOpen() ? set.rightOpen : set.right
     return beakOpen() ? set.leftOpen : set.left
   }
   const artWidth = () => {
@@ -236,8 +249,8 @@ export function Ducksay(props: {
    */
   const park = () => {
     const reach = limit()
-    column = Math.min(Math.max(column, 0), reach)
-    direction = column * 2 <= reach ? 1 : -1
+    state.column = Math.min(Math.max(state.column, 0), reach)
+    state.direction = state.column * 2 <= reach ? 1 : -1
   }
 
   /**
@@ -252,7 +265,7 @@ export function Ducksay(props: {
    */
   const waterLine = (row: number) => {
     let line = ""
-    for (let cell = 0; cell < WATER_WIDTH; cell++) line += hasTilde(cell, wavePhase, row) ? "~" : " "
+    for (let cell = 0; cell < WATER_WIDTH; cell++) line += hasTilde(cell, state.wavePhase, row) ? "~" : " "
     return line
   }
 
@@ -264,7 +277,7 @@ export function Ducksay(props: {
    * and push it off the row entirely once the duck left the left edge.
    */
   const overWater = (water: string, sprite: string) =>
-    water.slice(0, column) + sprite + water.slice(column + sprite.length)
+    water.slice(0, state.column) + sprite + water.slice(state.column + sprite.length)
 
   /**
    * Puts a bubble segment on `row` at column `at`.
@@ -294,7 +307,7 @@ export function Ducksay(props: {
    */
   const paint = () => {
     const sprite = art()
-    const indent = " ".repeat(column)
+    const indent = " ".repeat(state.column)
     // Every row is rebuilt on every paint, which is also what clears a bubble
     // that has just gone away; the reserve above the duck stays blank otherwise.
     const rows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
@@ -304,10 +317,10 @@ export function Ducksay(props: {
     rows[LOWER_WATER_ROW] = waterLine(1)
 
     if (bubbleVisible()) {
-      const side: BubbleSide = direction === 1 ? "right" : "left"
+      const side: BubbleSide = state.direction === 1 ? "right" : "left"
       // The bubble hugs the beak: to the right of the duck when it faces right,
       // ending at the duck's column when it faces left.
-      const at = direction === 1 ? column + artWidth() : column - BUBBLE_WIDTH
+      const at = state.direction === 1 ? state.column + artWidth() : state.column - BUBBLE_WIDTH
       const segments = bubbleRows(wrapBubbleText(bubbleText()), side)
       for (const [index, segment] of segments.entries()) {
         if (segment !== undefined) rows[index] = overlay(rows[index] ?? "", segment, at)
@@ -319,7 +332,7 @@ export function Ducksay(props: {
     // two ever coincide. It takes the art's colour, as every content row does.
     if (frozen()) {
       const glyph = QUESTION_FRAMES[questionFrame()] ?? QUESTION_FRAMES[0]
-      const at = questionColumn(column, direction)
+      const at = questionColumn(state.column, state.direction)
       rows[QUESTION_ROW] = overlay(rows[QUESTION_ROW] ?? "", glyph, at)
     }
 
@@ -482,11 +495,13 @@ export function Ducksay(props: {
    */
   const startJoke = () => {
     const joke = props.joke
-    if (joke === undefined || !hasSwum) return
+    if (joke === undefined || !state.hasSwum) return
     cancelJoke()
     setJokeReady(false)
     setJokeText(DEFAULT_BUBBLE_TEXT)
-    setDotsStep(0)
+    // The dots keep their frame: a request that is repeated after the sidebar
+    // was rebuilt resumes the waiting bubble instead of going back to one dot.
+    // A new turn resets the frame when it starts.
     setShown(0)
     const current = createJokeRequest(joke)
     request = current
@@ -528,7 +543,7 @@ export function Ducksay(props: {
 
     // A duck that never moved — zero speed, or a lane narrower than the art —
     // has no turn to joke about.
-    if (!wasBusy || !hasSwum) return
+    if (!wasBusy || !state.hasSwum) return
     // The turn is over and owes a joke. Whether the request starts now is
     // decided by the effect below.
     setOwed(true)
@@ -542,7 +557,7 @@ export function Ducksay(props: {
     const working = busy()
     if (!owed()) return
     if (waiting || working) return
-    if (!hasSwum) {
+    if (!state.hasSwum) {
       setOwed(false)
       return
     }
@@ -554,7 +569,31 @@ export function Ducksay(props: {
     startJoke()
   })
 
-  onCleanup(cancelJoke)
+  // The signals are the reactive view; the snapshot is what a later mount
+  // reads. Writing it on every change keeps the two from drifting apart, and
+  // the cleanup writes once more for a change that landed as the section went
+  // away.
+  createEffect(() => {
+    state.mode = mode()
+    state.jokeReady = jokeReady()
+    state.jokeText = jokeText()
+    state.dotsStep = dotsStep()
+    state.shown = shown()
+    state.owed = owed()
+  })
+
+  onCleanup(() => {
+    state.mode = mode()
+    state.jokeReady = jokeReady()
+    state.jokeText = jokeText()
+    state.dotsStep = dotsStep()
+    state.shown = shown()
+    state.owed = owed()
+    // A cancelled request never delivers its answer, so the next mount has to
+    // ask again instead of sitting on waiting dots that will never advance.
+    if (request !== undefined) state.owed = true
+    cancelJoke()
+  })
 
   // `paint` writes imperative lines, so a signal change needs an explicit
   // repaint and frame request. The waiting and typing timers only move signals;
@@ -670,13 +709,13 @@ export function Ducksay(props: {
       // of state that could drift out of step with the first. The phase is kept
       // inside one period, because the pattern repeats there and a float that
       // grows all session loses precision for nothing.
-      wavePhase = (wavePhase + waveSpeed(swimSpeed, limit()) * (TICK_MS / 1000)) % WAVE_PERIOD
+      state.wavePhase = (state.wavePhase + waveSpeed(swimSpeed, limit()) * (TICK_MS / 1000)) % WAVE_PERIOD
 
       const reach = limit()
       if (reach === 0) {
         // A lane narrower than the art has no room to swim in. Sitting at the
         // left edge, nose inwards, is the closest thing to a correct pose.
-        column = 0
+        state.column = 0
         if (mode() === "dock") setMode("rest")
         park()
         paint()
@@ -689,10 +728,10 @@ export function Ducksay(props: {
       while (accumulated >= interval && budget > 0) {
         accumulated -= interval
         budget -= 1
-        const move = moveTowardsEdge(column, direction, reach)
-        if (move.column !== column) hasSwum = true
-        column = move.column
-        direction = move.direction
+        const move = moveTowardsEdge(state.column, state.direction, reach)
+        if (move.column !== state.column) state.hasSwum = true
+        state.column = move.column
+        state.direction = move.direction
         if (move.turned) {
           // The turn spends the rest of the tick. Without this the leftover
           // time carries straight into the next column of the new direction and
@@ -749,6 +788,10 @@ export default Plugin.define({
     // Read once, when the section appears: the panel may open in the middle of
     // a turn, long before the next event arrives.
     const workingNow = (sessionID: string) => context.data.session.status(sessionID) === "running"
+    // One store for the whole plugin lifetime. OpenCode rebuilds the sidebar
+    // when the displayed session changes, and a new section without this would
+    // start from the left edge instead of coming back where it was.
+    const states = createDuckStates()
 
     // The request reads the cache when the turn ends, not when the panel opens:
     // by then `data` has the messages the turn produced. Without a session
@@ -777,6 +820,7 @@ export default Plugin.define({
           renderer={context.renderer}
           data={context.data}
           sessionID={sessionID}
+          states={states}
           isRunning={() => workingNow(sessionID)}
           joke={createJokeGenerator({
             client: context.client,
