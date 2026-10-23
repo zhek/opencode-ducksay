@@ -1,7 +1,7 @@
 import type { PluginOptions } from "@opencode/plugin/options"
 
 /** Columns per second the duck swims at when the user sets nothing. */
-export const DEFAULT_SWIM_SPEED = 12
+export const DEFAULT_SWIM_SPEED = 10
 
 /** Above this the duck crosses the lane faster than it can be read. */
 export const MAX_SWIM_SPEED = 120
@@ -37,7 +37,7 @@ function clamp(value: unknown): number {
 }
 
 /** How long the duck waits for the joke before falling back, in milliseconds. */
-export const DEFAULT_LLM_TIMEOUT_MS = 25_000
+export const DEFAULT_LLM_TIMEOUT_MS = 60_000
 
 /** Above this the user waits too long for a resting duck to say anything. */
 export const MAX_LLM_TIMEOUT_MS = 120_000
@@ -55,7 +55,7 @@ export const MAX_CONTEXT_DEPTH = 10
  * milliseconds. The same defensive rules as `swimSpeed` apply:
  *
  * - no option, `null`, a blank string, `0`, a negative number, `NaN`,
- *   `Infinity`, a boolean or an object → the twenty-five-second default;
+ *   `Infinity`, a boolean or an object → the sixty-second default;
  * - a finite positive number, or a string holding one → that many seconds;
  * - anything above one hundred twenty seconds → two minutes.
  *

@@ -1,7 +1,7 @@
 # Configuration and options
 
 `opencode-ducksay` has three options: `swimSpeed`, `llmTimeout` and `llmContextDepth`. All are optional. With nothing
-configured the duck swims at 12 columns per second, waits twenty-five seconds for a joke, and reads two recent messages of each
+configured the duck swims at 10 columns per second, waits sixty seconds for a joke, and reads two recent messages of each
 role.
 
 At rest the duck asks the model of the current session for a short joke. The request is built locally from recent
@@ -29,8 +29,8 @@ Restart OpenCode after editing the file. Entry forms accepted by OpenCode for a 
 
 ## `swimSpeed`
 
-How fast the duck swims, in columns per second. The sidebar lane is about 29 columns wide, so the default of `12` takes
-roughly 2.4 seconds to cross it.
+How fast the duck swims, in columns per second. The sidebar lane is about 29 columns wide, so the default of `10` takes
+roughly 2.9 seconds to cross it.
 
 The same number sets the tempo of the water: the pattern travels at a rate that completes one whole pass for each trip
 across the sidebar. There is no separate option for the water, so `swimSpeed` is the only thing that controls how the
@@ -44,11 +44,11 @@ section animates.
 
 | Value | Result |
 | --- | --- |
-| not set | `12` columns per second |
+| not set | `10` columns per second |
 | `0` | The duck never moves, the water never travels and no joke is requested — except for the marker of a question waiting for an answer |
 | `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
 | a number written as a string, `"24"` | Read as the same number |
-| anything else — a negative number, a word, an empty value | Falls back to `12` |
+| anything else — a negative number, a word, an empty value | Falls back to `10` |
 
 A number without quotes is the normal way to write it. Quotes are accepted, because they are a common slip and silently
 swapping a requested `24` for the default would be worse than reading what was written. An empty value is treated as "not
@@ -74,10 +74,10 @@ plugin is reading the session locally, so a large context does not eat into the 
 
 | Value | Result |
 | --- | --- |
-| not set | `25` seconds |
+| not set | `60` seconds |
 | a finite positive number | That many seconds |
 | a number written as a string, `"10"` | Read as the same number |
-| `0`, a negative number, a blank value or anything that is not a number | Falls back to `25` seconds |
+| `0`, a negative number, a blank value or anything that is not a number | Falls back to `60` seconds |
 | a value above `120` | Capped at `120` seconds |
 
 When the timeout expires, the request is cancelled and the bubble shows `Quack-quack!`. There is no retry until the next

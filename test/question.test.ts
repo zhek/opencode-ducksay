@@ -3,12 +3,16 @@ import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "../src/question.ts"
 
 describe("question frames", () => {
-  test("cycles through question, exclamation, mirrored question, exclamation", () => {
-    expect([...QUESTION_FRAMES]).toEqual(["?", "!", "⸮", "!"])
+  test("holds each question face for two frames with one edge frame between", () => {
+    expect([...QUESTION_FRAMES]).toEqual(["?", "?", "!", "⸮", "⸮", "!"])
   })
 
-  test("stays on each frame for 300 milliseconds", () => {
-    expect(QUESTION_FRAME_MS).toBe(300)
+  test("advances every 150 milliseconds", () => {
+    expect(QUESTION_FRAME_MS).toBe(150)
+  })
+
+  test("takes 900 milliseconds to turn all the way around", () => {
+    expect(QUESTION_FRAMES.length * QUESTION_FRAME_MS).toBe(900)
   })
 })
 

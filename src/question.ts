@@ -8,11 +8,16 @@ import type { Direction } from "./lane.ts"
  * and `lane.ts`: the section owns the clock and asks what to draw.
  */
 
-/** The frames the marker cycles through, in order. */
-export const QUESTION_FRAMES = ["?", "!", "⸮", "!"] as const
+/**
+ * The frames the marker cycles through, in order.
+ *
+ * A face repeats so it stays on screen for two 150 ms steps (300 ms), while
+ * the edge `!` appears for one step. The whole turn is 900 ms.
+ */
+export const QUESTION_FRAMES = ["?", "?", "!", "⸮", "⸮", "!"] as const
 
 /** How long one marker frame stays on screen, in milliseconds. */
-export const QUESTION_FRAME_MS = 300
+export const QUESTION_FRAME_MS = 150
 
 /**
  * The column of the marker over the bracket by the beak.
