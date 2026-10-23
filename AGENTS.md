@@ -34,7 +34,8 @@
 ### Where these rules live
 
 The authoritative copies are in `openspec/config.yaml` — `rules.tasks` for authoring `tasks.md`, `operations.apply.guidance`
-for implementation. Edit there first, then mirror here; the two must not drift.
+for implementation, `operations.archive.guidance` for archiving. Edit there first, then mirror here; the two must not
+drift.
 
 ## Commands
 
@@ -115,12 +116,15 @@ Rules:
   command unchanged. Work that is not a change goes on `chore/<slug>` or `fix/<slug>`.
 - **`feat:` and `fix:` carry their tests in the same commit** — either the test itself, or a pointer to the task that
   covers it. This is the commit-level enforcement of the rule above.
+- **Specs and archives are `docs:` commits.** Creating or changing a change's spec delta and archiving the change each
+  go in a `docs:` commit — `docs: add <name> spec`, `docs: update <name> spec`, `docs: archive <name>` — separate from
+  implementation commits.
 - **`docs:` changes `README.md` and `README.ru.md` together**, in one commit, so the two versions cannot drift apart in
   history.
 - **Squash-merge** the PR into `main`; the PR title becomes the commit message.
-- **Archive inside the PR**, as its last commit. `/opsx-archive` creates the main spec and moves the change to `archive/`
-  before the merge, so `main` is consistent the moment it lands — no active change, no capability missing from
-  `openspec/specs/`.
+- **Archive inside the PR**, as its last commit, typed `docs:` (`docs: archive <name>`). `/opsx-archive` creates the main
+  spec and moves the change to `archive/` before the merge, so `main` is consistent the moment it lands — no active
+  change, no capability missing from `openspec/specs/`.
 - Because the archive lands before review closes, a change to a requirement means editing it in **two** places: the
   archived delta and the main spec. Let them drift and `main` becomes inconsistent anyway — the thing this rule exists to
   prevent.
