@@ -5,8 +5,10 @@ import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
+import { createSignal } from "solid-js/dist/solid.js"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import type { JokeClient } from "../src/joke.ts"
+import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import plugin from "../src/tui.tsx"
 
 /** `SESSION_SIDEBAR_WIDTH` from OpenCode's session sidebar. */
@@ -15,8 +17,8 @@ const PANEL_WIDTH = 42
 /** Where the duck can get to: the lane minus the art. */
 const RIGHT_EDGE = PANEL_WIDTH - DUCK_WIDTH
 
-/** One column at the default speed of 12 columns per second. */
-const COLUMN_MS = 1000 / 12
+/** One column at the plugin's default speed. */
+const COLUMN_MS = 1000 / DEFAULT_SWIM_SPEED
 
 const SESSION = "ses_duck"
 const OTHER_SESSION = "ses_other"
@@ -192,6 +194,8 @@ interface Mounted {
   readonly frame: () => Promise<string>
   /** Paints `frames` frames of `ms` each and returns the last one. */
   readonly swim: (frames: number, ms?: number) => Promise<string>
+  /** Switches the session the slot input points at, without remounting the claim. */
+  readonly setSession: (sessionID: string) => void
   readonly close: () => Promise<void>
 }
 
@@ -221,8 +225,18 @@ async function mountClaim(
   })
   if (options.running === true) harness.statuses.set(SESSION, "running")
   await plugin.setup(harness.context)
+  // The host calls the claim render once and passes a reactive input object.
+  // Keeping the element instead of re-calling `render` reproduces that: the
+  // section sees a changing `sessionID` without being rebuilt by the test.
+  const [session, setSession] = createSignal(SESSION)
+  const claimRender = harness.claims[0]!.render as (input: unknown) => unknown
+  let element: unknown
   await render(
-    () => (harness.claims[0]!.render as (input: unknown) => unknown)({ sessionID: SESSION }),
+    () => (element ??= claimRender({
+      get sessionID() {
+        return session()
+      },
+    })),
     setup.renderer,
   )
 
@@ -243,6 +257,7 @@ async function mountClaim(
       }
       return captured
     },
+    setSession,
     close: async () => {
       await setup.dispose()
       restoreTimers()
@@ -356,6 +371,24 @@ describe("section behaviour through the plugin", () => {
     }
   })
 
+  test("shows each session's own duck when the displayed session changes", async () => {
+    const mounted = await mountClaim({ running: true })
+    try {
+      const column = columnOf(await mounted.swim(5))
+      expect(column).toBeGreaterThan(0)
+
+      // The host keeps the claim mounted and only updates its reactive input.
+      mounted.setSession(OTHER_SESSION)
+      expect(columnOf(await mounted.frame())).toBe(0)
+
+      // Coming back restores the first session's snapshot.
+      mounted.setSession(SESSION)
+      expect(columnOf(await mounted.frame())).toBe(column)
+    } finally {
+      await mounted.close()
+    }
+  })
+
   test("swims on mount when the session is already running", async () => {
     // No event ever arrives: the panel was opened in the middle of a turn.
     const mounted = await mountClaim({ running: true })
@@ -382,8 +415,10 @@ describe("section behaviour through the plugin", () => {
     const mounted = await mountClaim({ options: { swimSpeed: "быстро" } })
     try {
       mounted.harness.emit("session.execution.started", forSession)
-      // The default of 12 columns per second is in effect.
-      expect(columnOf(await mounted.swim(10, COLUMN_MS))).toBeGreaterThan(0)
+      // The 33 ms tick means eleven 100 ms frames accumulate 1089 ms of swim
+      // time: ten whole columns at ten per second. The old default of twelve
+      // would cover thirteen.
+      expect(columnOf(await mounted.swim(11, COLUMN_MS))).toBe(10)
     } finally {
       await mounted.close()
     }

@@ -1,7 +1,14 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js/dist/solid.js"
+import {
+  createComponent,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  untrack,
+} from "solid-js"
 import {
   BUBBLE_CONTENT_ROWS,
   BUBBLE_MAX_LINES,
@@ -109,10 +116,10 @@ const QUESTION_ROW = HEAD_ROW - 1
  * real reactivity — so the frame loop below is a plain function that writes the
  * line contents and asks the renderer for a frame.
  *
- * For the same reason `isRunning` is a function rather than a boolean and
- * `sessionID` is read once: a prop value is frozen at creation, so the slot's
- * render must not read reactive state, or the host would rebuild this component
- * on every session event and throw away the duck's position.
+ * For the same reason `isRunning` is a function rather than a boolean. The
+ * slot's `sessionID` is reactive even though the host calls the claim's render
+ * once, so the section watches it and swaps the per-session snapshot in place
+ * instead of rebuilding its rows.
  */
 export function Ducksay(props: {
   primary: RGBA
@@ -139,18 +146,25 @@ export function Ducksay(props: {
    */
   states?: DuckStates
 }) {
-  const stored = props.states !== undefined && props.sessionID !== undefined
-    ? props.states.get(props.sessionID)
+  const initialSessionID = props.sessionID
+  const stored = props.states !== undefined && initialSessionID !== undefined
+    ? props.states.get(initialSessionID)
     : undefined
-  const state: DuckState = stored ?? createDuckState({
+  let state: DuckState = stored ?? createDuckState({
     // A static bubble is ready immediately. A generated one starts hidden and
     // becomes ready only when an answer or the fallback arrives.
     jokeReady: props.joke === undefined,
     jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
   })
-  if (stored === undefined && props.states !== undefined && props.sessionID !== undefined) {
-    props.states.set(props.sessionID, state)
+  if (stored === undefined && props.states !== undefined && initialSessionID !== undefined) {
+    props.states.set(initialSessionID, state)
   }
+  /**
+   * The session whose snapshot `state` currently holds. The host keeps the
+   * section mounted and updates `sessionID` reactively, so this is what tells
+   * the switch effect that the duck has to move to another session's snapshot.
+   */
+  let activeSessionID = initialSessionID
 
   const [mode, setMode] = createSignal<Mode>(state.mode)
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
@@ -181,6 +195,78 @@ export function Ducksay(props: {
   let lastBusy = busy()
   let request: JokeRequest | undefined
   const lines: (TextRenderable | undefined)[] = []
+
+  const cancelJoke = () => {
+    request?.cancel()
+    request = undefined
+  }
+
+  /**
+   * Copies the reactive view back into the snapshot. A live request does not
+   * change the snapshot's `owed` flag by itself; that only happens when the
+   * section lets go of the request on a session switch or unmount.
+   */
+  const writeSnapshot = () => {
+    state.mode = mode()
+    state.jokeReady = jokeReady()
+    state.jokeText = jokeText()
+    state.dotsStep = dotsStep()
+    state.shown = shown()
+    state.owed = owed()
+  }
+
+  /**
+   * Moves the section to another session without rebuilding its rows.
+   *
+   * The host calls the claim's `render` once, so `sessionID` is the only prop
+   * that changes on a tab switch. Saving the departing snapshot first keeps
+   * that tab where it was; loading the arriving one restores its column, pose
+   * and bubble. The old request is cancelled with its debt recorded, and the
+   * new session's running state is copied into `lastBusy` so the switch itself
+   * is not mistaken for the end of a turn.
+   */
+  createEffect(() => {
+    const nextSessionID = props.sessionID
+    if (nextSessionID === activeSessionID) return
+    const previousSessionID = activeSessionID
+    activeSessionID = nextSessionID
+
+    if (previousSessionID !== undefined && props.states !== undefined) {
+      writeSnapshot()
+      if (request !== undefined) state.owed = true
+      props.states.set(previousSessionID, state)
+    }
+    cancelJoke()
+
+    const nextState = nextSessionID !== undefined ? props.states?.get(nextSessionID) : undefined
+    state = nextState ?? createDuckState({
+      jokeReady: props.joke === undefined,
+      jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
+    })
+    if (nextSessionID !== undefined) props.states?.set(nextSessionID, state)
+
+    setMode(state.mode)
+    setJokeReady(state.jokeReady)
+    setJokeText(state.jokeText)
+    setDotsStep(state.dotsStep)
+    setShown(state.shown)
+    setOwed(state.owed)
+    setAskedForms(new Set<string>())
+    setQuestionFrame(0)
+
+    const running = props.isRunning?.() === true
+    lastBusy = running
+    setBusy(running)
+    // A snapshot can say `swim` even though the session finished while another
+    // tab was shown. The mode effect does not see a busy change in that case,
+    // so settle the mode here the same way it would on a fresh mount.
+    setMode((current) => (running ? "swim" : current === "swim" ? "dock" : current))
+    // Two resting sessions can have identical signals while their columns and
+    // headings differ. The snapshot swap would then wake no effect, so paint
+    // the new pose explicitly.
+    paint()
+    props.renderer?.requestRender()
+  })
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
   /**
@@ -483,16 +569,9 @@ export function Ducksay(props: {
     setMode((current) => (working ? "swim" : current === "swim" ? "dock" : current))
   })
 
-  const cancelJoke = () => {
-    request?.cancel()
-    request = undefined
-  }
-
-  /**
-   * Starts the request for the turn that has just ended. A duck that never
-   * moved has no turn to joke about; a missing generator means the static
-   * `bubbleText` is all this section shows.
-   */
+  // Starts the request for the turn that has just ended. A duck that never
+  // moved has no turn to joke about; a missing generator means the static
+  // `bubbleText` is all this section shows.
   const startJoke = () => {
     const joke = props.joke
     if (joke === undefined || !state.hasSwum) return
@@ -574,21 +653,11 @@ export function Ducksay(props: {
   // the cleanup writes once more for a change that landed as the section went
   // away.
   createEffect(() => {
-    state.mode = mode()
-    state.jokeReady = jokeReady()
-    state.jokeText = jokeText()
-    state.dotsStep = dotsStep()
-    state.shown = shown()
-    state.owed = owed()
+    writeSnapshot()
   })
 
   onCleanup(() => {
-    state.mode = mode()
-    state.jokeReady = jokeReady()
-    state.jokeText = jokeText()
-    state.dotsStep = dotsStep()
-    state.shown = shown()
-    state.owed = owed()
+    writeSnapshot()
     // A cancelled request never delivers its answer, so the next mount has to
     // ask again instead of sitting on waiting dots that will never advance.
     if (request !== undefined) state.owed = true
@@ -813,24 +882,29 @@ export default Plugin.define({
     // `slot` already returns its own teardown: it unregisters the claim.
     return context.ui.slot({
       append: "sidebar.content",
-      render: ({ sessionID }) => (
-        <Ducksay
-          primary={context.theme.text.base}
-          swimSpeed={swimSpeed}
-          renderer={context.renderer}
-          data={context.data}
-          sessionID={sessionID}
-          states={states}
-          isRunning={() => workingNow(sessionID)}
-          joke={createJokeGenerator({
-            client: context.client,
-            sessionID,
-            source: () => jokeSource(sessionID),
-            depth: contextDepth,
-            timeoutMs: llmTimeout,
-          })}
-        />
-      ),
+      // The host calls `render` once and keeps the input's `sessionID` getter
+      // reactive. Passing that getter straight through lets the section swap
+      // snapshots on a tab switch. The two closures read the input when they
+      // are called, so a new session also gets its own status and request
+      // instead of the first session's.
+      render: (input) => createComponent(Ducksay, {
+        primary: context.theme.text.base,
+        swimSpeed,
+        renderer: context.renderer,
+        data: context.data,
+        get sessionID() {
+          return input.sessionID
+        },
+        states,
+        isRunning: () => workingNow(input.sessionID),
+        joke: (signal) => createJokeGenerator({
+          client: context.client,
+          sessionID: input.sessionID,
+          source: () => jokeSource(input.sessionID),
+          depth: contextDepth,
+          timeoutMs: llmTimeout,
+        })(signal),
+      }),
     })
   },
 })

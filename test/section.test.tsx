@@ -19,6 +19,7 @@ const Conditional = Show as unknown as (props: {
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { createDuckStates, type DuckStates } from "../src/duck-state.ts"
+import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
@@ -37,8 +38,8 @@ const PANEL_CONTENT_WIDTH = 37
  */
 const PRIMARY = RGBA.fromHex("#e5e5e5")
 
-/** One column at the default speed of 12 columns per second. */
-const COLUMN_MS = 1000 / 12
+/** One column at the plugin's default speed. */
+const COLUMN_MS = 1000 / DEFAULT_SWIM_SPEED
 
 /** The interval the section ticks on; see `TICK_MS` in `src/tui.tsx`. */
 const TICK_MS = 33
@@ -253,7 +254,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
             createComponent(Ducksay, {
               primary: PRIMARY,
               renderer: setup.renderer,
-              swimSpeed: options.swimSpeed ?? 12,
+              swimSpeed: options.swimSpeed ?? DEFAULT_SWIM_SPEED,
               data,
               get sessionID() {
                 return session()
@@ -610,6 +611,71 @@ describe("rebuilding the section", () => {
     expect(columnOf(await back.frame())).toBe(column)
     await back.dispose()
   })
+
+  test("keeps the bubble with the session that owns it", async () => {
+    // Switching tabs must not carry the duck or its bubble into the next
+    // session, and coming back must show the same place and the same bubble.
+    const states = createDuckStates()
+    const harness = await mount({ states, sessionID: "ses_one", bubbleText: "Quack-quack!" })
+    harness.setRunning(true)
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const before = await harness.tick(RIGHT_EDGE + 2)
+    expect(before).toContain("Quack-quack!")
+    const column = columnOf(before)
+    const heading = facesRight(before)
+
+    harness.setSession("ses_two")
+    const other = await harness.frame()
+    expect(columnOf(other)).toBe(0)
+    expect(other).not.toContain("Quack-quack!")
+    expect(other).not.toContain("╭")
+
+    harness.setSession("ses_one")
+    const after = await harness.frame()
+    expect(columnOf(after)).toBe(column)
+    expect(facesRight(after)).toBe(heading)
+    expect(after).toContain("Quack-quack!")
+    await harness.dispose()
+  })
+
+  test("keeps the default pace across a tab switch", async () => {
+    const states = createDuckStates()
+    const harness = await mount({ states, sessionID: "ses_one", running: true })
+    await harness.tick(2)
+    const before = columnOf(await harness.frame())
+
+    harness.setSession("ses_two")
+    await harness.frame()
+    harness.setSession("ses_one")
+    await harness.frame()
+
+    const after = columnOf(await harness.advance(1000))
+    expect(after - before).toBe(9)
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("docks a session that went idle while another tab was shown", async () => {
+    // The snapshot still says `swim`, but the turn ended while another tab was
+    // visible. Returning must finish the dock instead of swimming on.
+    const states = createDuckStates()
+    const harness = await mount({ states, sessionID: "ses_one" })
+    harness.setRunning(true)
+    const column = columnOf(await harness.tick(3))
+    expect(column).toBeGreaterThan(0)
+
+    harness.setSession("ses_two")
+    await harness.frame()
+    harness.setSession("ses_one")
+    const after = await harness.tick(RIGHT_EDGE + 2)
+
+    expect(columnOf(after)).toBe(RIGHT_EDGE)
+    expect(facesRight(after)).toBe(false)
+    expect(after).toContain("╭")
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
 })
 
 describe("animation timers", () => {
@@ -739,24 +805,24 @@ describe("question marker", () => {
     expect(columnOf(frame)).toBe(0)
     expect(harness.activeTimers()).toBe(1)
 
-    const next = await harness.advance(QUESTION_FRAME_MS)
+    const next = await harness.advance(QUESTION_FRAME_MS * 2)
     expect(questionMarker(next)?.glyph).toBe("!")
     expect(columnOf(next)).toBe(0)
     await harness.dispose()
   })
 
-  test("cycles ? -> ! -> ⸮ -> ! without moving its column", async () => {
+  test("cycles ? -> ? -> ! -> ⸮ -> ⸮ -> ! without moving its column", async () => {
     const harness = await mount()
     harness.formCreated("form-1")
 
     const frames = [await harness.frame()]
     const glyphs = [questionMarker(frames[0]!)?.glyph]
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       frames.push(await harness.advance(QUESTION_FRAME_MS))
       glyphs.push(questionMarker(frames[frames.length - 1]!)?.glyph)
     }
 
-    expect(glyphs).toEqual(["?", "!", "⸮", "!", "?"])
+    expect(glyphs).toEqual(["?", "?", "!", "⸮", "⸮", "!", "?"])
     const columns = frames.map((frame) => questionMarker(frame)!.column)
     expect(new Set(columns)).toEqual(new Set([columns[0]]))
     await harness.dispose()
@@ -765,7 +831,7 @@ describe("question marker", () => {
   test("keeps the cycle running while a second form is open", async () => {
     const harness = await mount()
     harness.formCreated("form-1")
-    await harness.advance(QUESTION_FRAME_MS)
+    await harness.advance(QUESTION_FRAME_MS * 2)
     const before = await harness.frame()
     expect(questionMarker(before)?.glyph).toBe("!")
 
@@ -931,7 +997,9 @@ describe("question marker", () => {
     expect(facesRight(await harness.frame())).toBe(heading)
 
     harness.formReplied("form-1")
-    const resumed = await harness.advance(TICK_MS * 3)
+    // One column plus one tick: the default 100 ms column interval is longer
+    // than the three 33 ms ticks that make up 99 ms.
+    const resumed = await harness.advance(COLUMN_MS + TICK_MS)
     expect(columnOf(resumed)).not.toBe(column)
     await harness.dispose()
   })
@@ -1020,7 +1088,7 @@ describe("question marker", () => {
     // The swim heartbeat is gone; the marker's timer is the only one left.
     expect(harness.activeTimers()).toBe(1)
 
-    const next = await harness.advance(QUESTION_FRAME_MS)
+    const next = await harness.advance(QUESTION_FRAME_MS * 2)
     expect(questionMarker(next)?.glyph).toBe("!")
     expect(harness.activeTimers()).toBe(1)
     await harness.dispose()
@@ -1165,7 +1233,7 @@ describe("water", () => {
     // tick at a time, so the tempo the section derives is what is under test:
     // one period per crossing, whatever the lane width.
     const ticks = Math.ceil(1000 / TICK_MS)
-    const expected = Math.floor(waveSpeed(12, RIGHT_EDGE) * ticks * (TICK_MS / 1000))
+    const expected = Math.floor(waveSpeed(DEFAULT_SWIM_SPEED, RIGHT_EDGE) * ticks * (TICK_MS / 1000))
     const shift = shiftOf(before, after)
     expect(shift).toBe(expected)
     expect(shift).toBeGreaterThan(0)

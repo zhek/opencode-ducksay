@@ -52,7 +52,8 @@ the middle. At rest it always stands at an edge, on the left one when the plugin
 ## A question
 
 When the session asks you something and waits for your answer, the duck stops where it is: the water stops with it, the
-bubble is hidden and the beak is closed. Above the beak a marker appears and changes every 300 ms — `?`, `!`, `⸮`, `!` —
+bubble is hidden and the beak is closed. Above the beak a marker appears and flips through `?`, `!`, `⸮`, `!`: each
+question-mark face holds for 300 ms, while each exclamation mark flashes for 150 ms, so a full turn takes 900 ms. It stays
 until the question is answered or cancelled. The marker stands exactly over the bracket next to the beak, so it is right
 above the duck's mouth whichever way it faces, and it stays in that column while the frames change.
 
@@ -60,9 +61,10 @@ Nothing is lost while the duck waits. The joke keeps the frame it had — the sa
 question closes the duck carries on from the same column, in the same direction, with the water at the same phase. If the
 session is still working, it swims on; if the turn has ended, it swims to the edge and rests as usual.
 
-The same holds when the panel is rebuilt, for example after switching to another session and back: the duck returns to
-the column, heading and water phase it had, and an open question keeps its marker over the same spot. A finished rest
-bubble comes back with the same words.
+Each session keeps its own duck. Switching to another session and back restores the column, heading, water phase and
+finished rest bubble, and an open question keeps its marker over the same spot. The duck and its bubble never follow you
+into another session's tab, and an old tab does not leave a duck swimming alongside the visible one: the pace stays the
+same, and the end of a turn stops the duck even after you switch away and back.
 
 The marker shows even before the first swim, and at `swimSpeed: 0` it is the only thing that moves. Only a question of the
 session shown in the panel counts: permission requests and the assistant's own questions leave the duck alone.
@@ -93,8 +95,8 @@ The bubble is 29 columns wide with a 25-column text field. Text wraps by word in
 than the field is broken, and text that does not fit ends with `…`. A generated answer is shortened to what the bubble can
 show.
 
-There is no separate on/off switch. `llmTimeout` sets how many seconds the duck waits for the model — twenty-five by default,
-counting only the model's answer; `0`, a blank value or a value that is not a number means twenty-five, and anything above 120
+There is no separate on/off switch. `llmTimeout` sets how many seconds the duck waits for the model — sixty by default,
+counting only the model's answer; `0`, a blank value or a value that is not a number means sixty, and anything above 120
 means 120. `llmContextDepth` sets how many recent messages of each role are read — two by default, a whole number from 1 to
 10; a value above 10 means 10, while `0`, a fraction or a value that is not a number means two. The full tables are in
 [configuration and options](docs/configuration.md).
@@ -121,7 +123,7 @@ stop means one thing only.
 }
 ```
 
-The default is `12`. Set it to `0` for a duck that never moves and water that never travels.
+The default is `10`. Set it to `0` for a duck that never moves and water that never travels.
 
 ## Development
 

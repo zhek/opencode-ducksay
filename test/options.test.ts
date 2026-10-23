@@ -12,6 +12,11 @@ import {
 } from "../src/options.ts"
 
 describe("resolveSwimSpeed", () => {
+  test("defaults to ten columns per second", () => {
+    expect(DEFAULT_SWIM_SPEED).toBe(10)
+    expect(resolveSwimSpeed(undefined)).toBe(10)
+  })
+
   test("falls back to the default when no options are passed at all", () => {
     expect(resolveSwimSpeed(undefined)).toBe(DEFAULT_SWIM_SPEED)
   })
@@ -66,17 +71,22 @@ describe("resolveSwimSpeed", () => {
   })
 
   test("caps an absurdly high speed", () => {
-    expect(resolveSwimSpeed({ swimSpeed: 5000 })).toBe(MAX_SWIM_SPEED)
-    expect(resolveSwimSpeed({ swimSpeed: "5000" })).toBe(MAX_SWIM_SPEED)
+    expect(resolveSwimSpeed({ swimSpeed: 5000 })).toBe(120)
+    expect(resolveSwimSpeed({ swimSpeed: "5000" })).toBe(120)
   })
 })
 
 describe("resolveLlmTimeout", () => {
-  test("falls back to twenty-five seconds when no options are passed at all", () => {
+  test("defaults to sixty seconds", () => {
+    expect(DEFAULT_LLM_TIMEOUT_MS).toBe(60_000)
+    expect(resolveLlmTimeout(undefined)).toBe(60_000)
+  })
+
+  test("falls back to sixty seconds when no options are passed at all", () => {
     expect(resolveLlmTimeout(undefined)).toBe(DEFAULT_LLM_TIMEOUT_MS)
   })
 
-  test("falls back to twenty-five seconds when the option is absent or null", () => {
+  test("falls back to sixty seconds when the option is absent or null", () => {
     expect(resolveLlmTimeout({})).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ somethingElse: true })).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ llmTimeout: null })).toBe(DEFAULT_LLM_TIMEOUT_MS)
@@ -95,7 +105,7 @@ describe("resolveLlmTimeout", () => {
     expect(resolveLlmTimeout({ llmTimeout: "0.5" })).toBe(500)
   })
 
-  test("falls back to twenty-five seconds for blank strings, zero and negatives", () => {
+  test("falls back to sixty seconds for blank strings, zero and negatives", () => {
     expect(resolveLlmTimeout({ llmTimeout: "" })).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ llmTimeout: "   " })).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ llmTimeout: "0" })).toBe(DEFAULT_LLM_TIMEOUT_MS)
@@ -104,7 +114,7 @@ describe("resolveLlmTimeout", () => {
     expect(resolveLlmTimeout({ llmTimeout: "-4" })).toBe(DEFAULT_LLM_TIMEOUT_MS)
   })
 
-  test("falls back to twenty-five seconds for values that are not timeouts", () => {
+  test("falls back to sixty seconds for values that are not timeouts", () => {
     expect(resolveLlmTimeout({ llmTimeout: Number.NaN })).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ llmTimeout: Number.POSITIVE_INFINITY })).toBe(DEFAULT_LLM_TIMEOUT_MS)
     expect(resolveLlmTimeout({ llmTimeout: Number.NEGATIVE_INFINITY })).toBe(DEFAULT_LLM_TIMEOUT_MS)
@@ -114,8 +124,8 @@ describe("resolveLlmTimeout", () => {
   })
 
   test("caps a timeout above two minutes", () => {
-    expect(resolveLlmTimeout({ llmTimeout: 121 })).toBe(MAX_LLM_TIMEOUT_MS)
-    expect(resolveLlmTimeout({ llmTimeout: "5000" })).toBe(MAX_LLM_TIMEOUT_MS)
+    expect(resolveLlmTimeout({ llmTimeout: 121 })).toBe(120_000)
+    expect(resolveLlmTimeout({ llmTimeout: "5000" })).toBe(120_000)
   })
 })
 
