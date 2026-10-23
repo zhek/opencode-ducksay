@@ -53,6 +53,8 @@
 - The duck keeps its column, heading, water phase and rest bubble when the sidebar is rebuilt, for example after switching
   to another session and back, instead of starting again from the left edge; an open question keeps its marker over the
   same column.
+- Switching tabs no longer leaves an old duck swimming beside the visible one: the duck keeps its usual pace in every tab,
+  and the end of a turn stops it even after switching away and back.
 
 ## [1.2.0] — 2026-10-18
 

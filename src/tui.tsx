@@ -8,7 +8,7 @@ import {
   createSignal,
   onCleanup,
   untrack,
-} from "solid-js/dist/solid.js"
+} from "solid-js"
 import {
   BUBBLE_CONTENT_ROWS,
   BUBBLE_MAX_LINES,

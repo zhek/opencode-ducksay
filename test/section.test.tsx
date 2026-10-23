@@ -639,6 +639,23 @@ describe("rebuilding the section", () => {
     await harness.dispose()
   })
 
+  test("keeps the default pace across a tab switch", async () => {
+    const states = createDuckStates()
+    const harness = await mount({ states, sessionID: "ses_one", running: true })
+    await harness.tick(2)
+    const before = columnOf(await harness.frame())
+
+    harness.setSession("ses_two")
+    await harness.frame()
+    harness.setSession("ses_one")
+    await harness.frame()
+
+    const after = columnOf(await harness.advance(1000))
+    expect(after - before).toBe(9)
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
   test("docks a session that went idle while another tab was shown", async () => {
     // The snapshot still says `swim`, but the turn ended while another tab was
     // visible. Returning must finish the dock instead of swimming on.

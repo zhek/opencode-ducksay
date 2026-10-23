@@ -63,7 +63,8 @@ session is still working, it swims on; if the turn has ended, it swims to the ed
 
 Each session keeps its own duck. Switching to another session and back restores the column, heading, water phase and
 finished rest bubble, and an open question keeps its marker over the same spot. The duck and its bubble never follow you
-into another session's tab.
+into another session's tab, and an old tab does not leave a duck swimming alongside the visible one: the pace stays the
+same, and the end of a turn stops the duck even after you switch away and back.
 
 The marker shows even before the first swim, and at `swimSpeed: 0` it is the only thing that moves. Only a question of the
 session shown in the panel counts: permission requests and the assistant's own questions leave the duck alone.
