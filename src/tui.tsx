@@ -24,10 +24,11 @@ import {
   type DuckState,
   type DuckStates,
   type Mode,
+  type Speech,
 } from "./duck-state.ts"
 import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
-import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSwimSpeed } from "./options.ts"
+import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
   THINKING_STEPS,
@@ -124,6 +125,8 @@ const QUESTION_ROW = HEAD_ROW - 1
 export function Ducksay(props: {
   primary: RGBA
   swimSpeed?: number
+  /** Turns the duck's speech off completely: no bubble, no text, no request. */
+  silent?: boolean
   renderer?: CliRenderer
   data?: Data
   sessionID?: string
@@ -151,9 +154,6 @@ export function Ducksay(props: {
     ? props.states.get(initialSessionID)
     : undefined
   let state: DuckState = stored ?? createDuckState({
-    // A static bubble is ready immediately. A generated one starts hidden and
-    // becomes ready only when an answer or the fallback arrives.
-    jokeReady: props.joke === undefined,
     jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
   })
   if (stored === undefined && props.states !== undefined && initialSessionID !== undefined) {
@@ -166,9 +166,16 @@ export function Ducksay(props: {
    */
   let activeSessionID = initialSessionID
 
+  // A session can finish while another tab is shown: its snapshot then still
+  // says `swim` and `idle`. A fresh mount has no busy change to observe, so the
+  // turn is settled here instead of being lost.
+  const hiddenTurn = state.mode === "swim" && state.speech === "idle" && props.isRunning?.() !== true
+  const initialSpeech: Speech =
+    hiddenTurn && props.silent !== true ? (props.joke === undefined ? "ready" : "waiting") : state.speech
+
   const [mode, setMode] = createSignal<Mode>(state.mode)
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
-  const [jokeReady, setJokeReady] = createSignal(state.jokeReady)
+  const [speech, setSpeech] = createSignal<Speech>(initialSpeech)
   const [jokeText, setJokeText] = createSignal(state.jokeText)
   // Index into `THINKING_STEPS`: which frame of the waiting dots is on screen.
   const [dotsStep, setDotsStep] = createSignal(state.dotsStep)
@@ -179,9 +186,6 @@ export function Ducksay(props: {
   // than a counter so a repeated event for one form cannot keep the marker up
   // after that form is gone.
   const [askedForms, setAskedForms] = createSignal<ReadonlySet<string>>(new Set())
-  // A turn that has ended and still owes a joke. The request waits while a
-  // form of the session is open, or while the session is busy again.
-  const [owed, setOwed] = createSignal(state.owed)
   // The marker frame starts at `?` and advances while at least one form waits.
   const [questionFrame, setQuestionFrame] = createSignal(0)
   /**
@@ -191,6 +195,10 @@ export function Ducksay(props: {
    */
   const frozen = createMemo(() => askedForms().size > 0)
 
+  // The lane is measured after the rows are built. Reading its width through a
+  // signal means the first real measurement releases a bubble that was waiting
+  // for the room, and a resize is followed without a special case.
+  const [laneWidth, setLaneWidth] = createSignal(0)
   let laneBox: BoxRenderable | undefined
   let lastBusy = busy()
   let request: JokeRequest | undefined
@@ -202,17 +210,16 @@ export function Ducksay(props: {
   }
 
   /**
-   * Copies the reactive view back into the snapshot. A live request does not
-   * change the snapshot's `owed` flag by itself; that only happens when the
-   * section lets go of the request on a session switch or unmount.
+   * Copies the reactive view back into the snapshot. A live request leaves
+   * `speech` at `waiting`, which is what lets the next mount ask again instead
+   * of sitting on dots that will never advance.
    */
   const writeSnapshot = () => {
     state.mode = mode()
-    state.jokeReady = jokeReady()
+    state.speech = speech()
     state.jokeText = jokeText()
     state.dotsStep = dotsStep()
     state.shown = shown()
-    state.owed = owed()
   }
 
   /**
@@ -233,28 +240,26 @@ export function Ducksay(props: {
 
     if (previousSessionID !== undefined && props.states !== undefined) {
       writeSnapshot()
-      if (request !== undefined) state.owed = true
       props.states.set(previousSessionID, state)
     }
     cancelJoke()
 
     const nextState = nextSessionID !== undefined ? props.states?.get(nextSessionID) : undefined
     state = nextState ?? createDuckState({
-      jokeReady: props.joke === undefined,
       jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
     })
     if (nextSessionID !== undefined) props.states?.set(nextSessionID, state)
 
+    const running = props.isRunning?.() === true
+    const hiddenTurn = !running && state.mode === "swim" && state.speech === "idle"
     setMode(state.mode)
-    setJokeReady(state.jokeReady)
+    setSpeech(hiddenTurn && props.silent !== true ? (props.joke === undefined ? "ready" : "waiting") : state.speech)
     setJokeText(state.jokeText)
     setDotsStep(state.dotsStep)
     setShown(state.shown)
-    setOwed(state.owed)
     setAskedForms(new Set<string>())
     setQuestionFrame(0)
 
-    const running = props.isRunning?.() === true
     lastBusy = running
     setBusy(running)
     // A snapshot can say `swim` even though the session finished while another
@@ -270,17 +275,18 @@ export function Ducksay(props: {
 
   const sprites = () => props.sprites ?? DEFAULT_SPRITES
   /**
-   * The resting pose the bubble belongs to. It is only entered after the duck
-   * has actually swum: the start-up pose is a rest too, and the user asked for
-   * no bubble before the first lap.
+   * Whether this lane may speak at all. `silent` is the explicit switch; a lane
+   * narrower than the art has no room for a bubble and stays quiet for that
+   * separate reason. The turn is still tracked in both cases.
    */
-  const resting = () => mode() === "rest" && state.hasSwum && !frozen()
+  const speechAllowed = () => props.silent !== true && limit() > 0
   /**
-   * The bubble is shown for the whole rest: either the waiting dots, while the
-   * answer is on its way, or the joke itself. The duck's rows and the section's
-   * height do not depend on which of the two is there.
+   * The bubble is shown for the rest that follows a finished turn: either the
+   * waiting dots, while the answer is on its way, or the joke itself. The duck's
+   * rows and the section's height do not depend on which of the two is there.
+   * The start-up rest has `speech: "idle"` and no bubble.
    */
-  const bubbleVisible = () => resting()
+  const bubbleVisible = () => mode() === "rest" && speech() !== "idle" && !frozen() && speechAllowed()
   /**
    * Whether the beak is open. It stays shut until there is a joke to say, so a
    * waiting duck does not look like it is talking over the dots. While the joke
@@ -288,9 +294,9 @@ export function Ducksay(props: {
    * it open. A static `bubbleText` is not animated, so it is open throughout.
    */
   const beakOpen = () => {
-    if (!resting()) return false
+    if (!bubbleVisible()) return false
     if (props.joke === undefined) return true
-    if (!jokeReady()) return false
+    if (speech() !== "ready") return false
     return beakOpenAt(shown(), bubbleWords(jokeText()).length)
   }
   /**
@@ -300,8 +306,8 @@ export function Ducksay(props: {
    * the static test seam is shown whole.
    */
   const bubbleText = () => {
+    if (speech() === "waiting") return thinkingText(THINKING_STEPS[dotsStep()] ?? 1)
     if (props.joke === undefined) return jokeText()
-    if (!jokeReady()) return thinkingText(THINKING_STEPS[dotsStep()] ?? 1)
     return revealText(jokeText(), shown())
   }
   const art = () => {
@@ -326,7 +332,7 @@ export function Ducksay(props: {
    * host gives it. `flexGrow` makes the box span the lane; without it the box
    * shrinks to the art and there is no room to swim at all.
    */
-  const limit = () => laneLimit(laneBox?.width ?? 0, artWidth())
+  const limit = () => laneLimit(laneWidth(), artWidth())
 
   /**
    * Parks the duck: inside the lane, nose towards the middle of it. Every route
@@ -561,22 +567,60 @@ export function Ducksay(props: {
   })
 
   // Reading `busy` here is what makes the mode follow the session: a busy
-  // session starts the swim, an idle one turns a swim into a dock. Any other
-  // transition leaves the mode alone, so a session that goes busy again
-  // mid-dock resumes swimming instead of restarting the dock.
+  // session starts the swim, an idle one turns a swim into a dock. At zero
+  // speed there is no dock to animate, so the duck settles straight into rest.
+  // Any other transition leaves the mode alone, so a session that goes busy
+  // again mid-dock resumes swimming instead of restarting the dock.
   createEffect(() => {
     const working = busy()
-    setMode((current) => (working ? "swim" : current === "swim" ? "dock" : current))
+    const swimSpeed = props.swimSpeed ?? DEFAULT_SWIM_SPEED
+    if (working) {
+      setMode("swim")
+      return
+    }
+    if (swimSpeed <= 0) {
+      setMode("rest")
+      return
+    }
+    setMode((current) => (current === "swim" ? "dock" : current))
   })
 
-  // Starts the request for the turn that has just ended. A duck that never
-  // moved has no turn to joke about; a missing generator means the static
-  // `bubbleText` is all this section shows.
+  // A turn that ends owes speech even if the duck never moved: a short turn, a
+  // zero-speed duck and a still duck all finish a turn. The lane can still be
+  // too narrow for a bubble, and `silent` can turn speech off, but neither
+  // changes the fact that the turn happened.
+  createEffect(() => {
+    const working = busy()
+    if (working === lastBusy) return
+    const wasBusy = lastBusy
+    lastBusy = working
+
+    if (working) {
+      // A new turn replaces the turn before it: the pending request is aborted
+      // and the new turn asks for its own joke when it ends.
+      cancelJoke()
+      setSpeech("idle")
+      setJokeText(DEFAULT_BUBBLE_TEXT)
+      setDotsStep(0)
+      setShown(0)
+      return
+    }
+
+    if (!wasBusy) return
+    if (props.silent === true) {
+      setSpeech("idle")
+      return
+    }
+    setSpeech(props.joke === undefined ? "ready" : "waiting")
+  })
+
+  // Starts the request for the turn that has just ended. A missing generator
+  // means the static `bubbleText` is all this section shows.
   const startJoke = () => {
     const joke = props.joke
-    if (joke === undefined || !state.hasSwum) return
+    if (joke === undefined || props.silent === true || limit() <= 0) return
     cancelJoke()
-    setJokeReady(false)
+    setSpeech("waiting")
     setJokeText(DEFAULT_BUBBLE_TEXT)
     // The dots keep their frame: a request that is repeated after the sidebar
     // was rebuilt resumes the waiting bubble instead of going back to one dot.
@@ -593,57 +637,21 @@ export function Ducksay(props: {
       // The first word is on screen in the same paint as the answer; the typing
       // timer only has to fetch the words after it.
       setShown(1)
-      setJokeReady(true)
+      setSpeech("ready")
     })
   }
 
   // A request belongs to the end of a turn, not to the rest pose: it starts
   // while the duck docks, so the bubble is usually ready by the time it stops.
-  // Reading `busy` alone is deliberate; `mode` changes during the dock and must
-  // not start a second request.
+  // A pending form holds it back until the last one closes; a turn that became
+  // busy again holds it back until its own end. A `waiting` snapshot left by a
+  // cancelled request starts a new request when the section comes back.
   createEffect(() => {
+    const waiting = speech() === "waiting"
     const working = busy()
-    if (working === lastBusy) return
-    const wasBusy = lastBusy
-    lastBusy = working
-
-    if (props.joke === undefined) return
-    if (working) {
-      // A new turn replaces the turn before it: the pending request is
-      // aborted and the new turn asks for its own joke when it ends.
-      setOwed(false)
-      cancelJoke()
-      setJokeReady(false)
-      setJokeText(DEFAULT_BUBBLE_TEXT)
-      setDotsStep(0)
-      setShown(0)
-      return
-    }
-
-    // A duck that never moved — zero speed, or a lane narrower than the art —
-    // has no turn to joke about.
-    if (!wasBusy || !state.hasSwum) return
-    // The turn is over and owes a joke. Whether the request starts now is
-    // decided by the effect below.
-    setOwed(true)
-  })
-
-  // The request starts when the turn that owes it is over and nothing waits
-  // for an answer: a pending form holds it back until the last one closes, and
-  // a session that has become busy again holds it back until its own turn ends.
-  createEffect(() => {
-    const waiting = frozen()
-    const working = busy()
-    if (!owed()) return
-    if (waiting || working) return
-    if (!state.hasSwum) {
-      setOwed(false)
-      return
-    }
-    setOwed(false)
-    // A request already in flight is the request of this turn. It is not
-    // cancelled because a form appeared, and its answer is used when the form
-    // closes — so the debt is paid by that request, not by a second one.
+    const blocked = frozen()
+    const allowed = speechAllowed()
+    if (!waiting || working || blocked || !allowed) return
     if (request !== undefined) return
     startJoke()
   })
@@ -658,9 +666,9 @@ export function Ducksay(props: {
 
   onCleanup(() => {
     writeSnapshot()
-    // A cancelled request never delivers its answer, so the next mount has to
-    // ask again instead of sitting on waiting dots that will never advance.
-    if (request !== undefined) state.owed = true
+    // A cancelled request never delivers its answer, so `speech` stays
+    // `waiting` and the next mount asks again instead of sitting on dots that
+    // will never advance.
     cancelJoke()
   })
 
@@ -668,7 +676,7 @@ export function Ducksay(props: {
   // repaint and frame request. The waiting and typing timers only move signals;
   // they never paint on their own.
   createEffect(() => {
-    jokeReady()
+    speech()
     jokeText()
     dotsStep()
     shown()
@@ -690,14 +698,13 @@ export function Ducksay(props: {
   })
 
   // The waiting dots run only while the duck rests with an answer still on the
-  // way. `mode` and `jokeReady` start and stop the effect; `hasSwum` is read as
-  // a plain flag, and the effect re-runs on the mode change that follows the
-  // first swim. `dotsStep` is deliberately not read here: advancing it must not
-  // tear down and recreate the interval on every frame.
+  // way. `mode` and `speech` start and stop the effect; `dotsStep` is
+  // deliberately not read here: advancing it must not tear down and recreate
+  // the interval on every frame.
   createEffect(() => {
     const renderer = props.renderer
     if (renderer === undefined || props.joke === undefined) return
-    if (!resting() || jokeReady()) return
+    if (!bubbleVisible() || speech() !== "waiting") return
 
     const tick = () => setDotsStep((step) => (step + 1) % THINKING_STEPS.length)
     const stop = (props.schedule ?? defaultSchedule)(tick, THINK_FRAME_MS)
@@ -712,7 +719,7 @@ export function Ducksay(props: {
   createEffect(() => {
     const renderer = props.renderer
     if (renderer === undefined || props.joke === undefined) return
-    if (!resting() || !jokeReady()) return
+    if (!bubbleVisible() || speech() !== "ready") return
 
     const text = jokeText()
     const words = bubbleWords(text)
@@ -798,7 +805,6 @@ export function Ducksay(props: {
         accumulated -= interval
         budget -= 1
         const move = moveTowardsEdge(state.column, state.direction, reach)
-        if (move.column !== state.column) state.hasSwum = true
         state.column = move.column
         state.direction = move.direction
         if (move.turned) {
@@ -835,7 +841,20 @@ export function Ducksay(props: {
   const lineCount = BUBBLE_CONTENT_ROWS
 
   return (
-    <box flexGrow={1} flexDirection="column" alignItems="flex-start" ref={(box) => (laneBox = box)}>
+    <box
+      flexGrow={1}
+      flexDirection="column"
+      alignItems="flex-start"
+      ref={(box) => {
+        laneBox = box
+        setLaneWidth(box.width)
+      }}
+      onSizeChange={() => {
+        setLaneWidth(laneBox?.width ?? 0)
+        paint()
+        props.renderer?.requestRender()
+      }}
+    >
       <text fg={props.primary}>
         <b>Ducksay</b>
       </text>
@@ -852,6 +871,7 @@ export default Plugin.define({
   id: "ducksay",
   setup: (context) => {
     const swimSpeed = resolveSwimSpeed(context.options)
+    const silent = resolveSilent(context.options)
     const llmTimeout = resolveLlmTimeout(context.options)
     const contextDepth = resolveContextDepth(context.options)
     // Read once, when the section appears: the panel may open in the middle of
@@ -890,6 +910,7 @@ export default Plugin.define({
       render: (input) => createComponent(Ducksay, {
         primary: context.theme.text.base,
         swimSpeed,
+        silent,
         renderer: context.renderer,
         data: context.data,
         get sessionID() {

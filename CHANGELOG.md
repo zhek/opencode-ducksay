@@ -14,6 +14,8 @@
   `10` is used as written, anything above `10` means `10`, and `0`, a fraction or anything that is not a number means `2`.
 - If the request fails, returns nothing or times out, the bubble says `Quack-quack!`. There is no retry until the next
   turn.
+- The `silent` option turns the duck's speech off: no bubble, no text and no model request. Only `true`, or the string
+  `"true"`, counts; leaving it out, `false`, `0` or another value keeps speech on.
 - While the joke is on its way, the bubble says `Quack` with an ellipsis that grows one dot at a time and then loops.
 - The joke appears word by word. The beak opens and closes every couple of words, pauses a little longer after
   punctuation, and always stops open on the last word.
@@ -25,7 +27,7 @@
 - The duck stops while a question of the shown session is open: the water stops with it, the bubble is hidden and the beak
   is closed. When the question closes, the duck continues from the same column, direction and water phase, and the joke
   picks up from the same ellipsis or word.
-- The marker shows before the first swim as well, and at `swimSpeed: 0` it is the only thing that moves.
+- The marker shows before the first finished turn as well, and it keeps working at `swimSpeed: 0` and with `silent: true`.
 - Only a question of the session shown in the panel counts: permission requests and the assistant's own questions leave the
   duck alone.
 - While a question is open the duck does not ask for a new joke. A request already on its way is not cancelled because of the
@@ -39,10 +41,12 @@
   appears or goes away.
 - The rest bubble is no longer fixed text: it is visible while the answer is pending and shows `Quack` with the growing
   ellipsis, then types the generated joke word by word, or `Quack-quack!` when no joke arrives.
-- The first rest after the plugin starts has no bubble. The beak stays closed while the duck waits and then flaps with the
-  typed words, ending open.
-- The duck does not ask for a joke before its first swim, when `swimSpeed` is `0`, or when the sidebar is narrower than the
-  drawing. There is no separate on/off switch.
+- The start-up rest, before any turn has finished, has no bubble. The beak stays closed while the duck waits and then flaps
+  with the typed words, ending open.
+- The duck now asks for a joke after any finished turn, whether or not it moved. A turn shorter than one animation tick
+  and a turn while the duck is not moving both get their joke.
+- `swimSpeed` controls only the duck and the water. `0` freezes both but leaves speech on; use `silent: true` to stop the
+  jokes. A sidebar narrower than the drawing still has no room for a bubble and does not request one.
 - The joke request runs in a temporary empty session created with the current session's model, so only the recent messages
   and metadata go to the model; the rest of the session history is not sent.
 

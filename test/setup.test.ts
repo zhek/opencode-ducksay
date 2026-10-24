@@ -411,6 +411,26 @@ describe("section behaviour through the plugin", () => {
     }
   })
 
+  test("does not ask for a joke when silent is true", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      client: deferred.client,
+      options: { silent: true },
+    })
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      const frame = await mounted.swim(RIGHT_EDGE + 2)
+
+      expect(deferred.calls).toHaveLength(0)
+      expect(frame).not.toContain("╭")
+    } finally {
+      await mounted.close()
+    }
+  })
+
   test("falls back to the default speed for a nonsense swimSpeed", async () => {
     const mounted = await mountClaim({ options: { swimSpeed: "быстро" } })
     try {

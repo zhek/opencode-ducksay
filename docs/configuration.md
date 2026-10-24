@@ -1,15 +1,16 @@
 # Configuration and options
 
-`opencode-ducksay` has three options: `swimSpeed`, `llmTimeout` and `llmContextDepth`. All are optional. With nothing
-configured the duck swims at 10 columns per second, waits sixty seconds for a joke, and reads two recent messages of each
-role.
+`opencode-ducksay` has four options: `swimSpeed`, `silent`, `llmTimeout` and `llmContextDepth`. All are optional. With
+nothing configured the duck swims at 10 columns per second, speaks, waits sixty seconds for a joke, and reads two recent
+messages of each role.
 
-At rest the duck asks the model of the current session for a short joke. The request is built locally from recent
-messages, the session title, the project and the branch; tool output, file contents and diffs are not sent. The request
-uses the model selected in the session, or the server's default model when none is selected, and it does not add a message
-to the transcript. While the answer is pending there is no bubble, and if the request fails, returns nothing or times out,
-the duck says `Quack-quack!`. There is no separate on/off switch: `swimSpeed: 0` stops the duck from swimming and therefore
-from asking for a joke at all.
+At rest after a finished turn the duck asks the model of the current session for a short joke. The request is built
+locally from recent messages, the session title, the project and the branch; tool output, file contents and diffs are not
+sent. The request uses the model selected in the session, or the server's default model when none is selected, and it
+does not add a message to the transcript. While the answer is pending the bubble says `Quack` with a growing ellipsis,
+and if the request fails, returns nothing or times out, the duck says `Quack-quack!`. `silent: true` is the switch that
+turns speech off. Before the first turn finishes, the duck rests silently: a finished turn, not a first swim, is what
+starts the joke.
 
 ## Enabling the plugin
 
@@ -34,7 +35,7 @@ roughly 2.9 seconds to cross it.
 
 The same number sets the tempo of the water: the pattern travels at a rate that completes one whole pass for each trip
 across the sidebar. There is no separate option for the water, so `swimSpeed` is the only thing that controls how the
-section animates.
+duck and the water move. It does not decide whether the duck speaks.
 
 ```json
 {
@@ -45,7 +46,7 @@ section animates.
 | Value | Result |
 | --- | --- |
 | not set | `10` columns per second |
-| `0` | The duck never moves, the water never travels and no joke is requested — except for the marker of a question waiting for an answer |
+| `0` | The duck never moves and the water never travels; speech still works and the question marker keeps moving |
 | `1` … `120` | That many columns per second; anything above `120` is capped at `120` |
 | a number written as a string, `"24"` | Read as the same number |
 | anything else — a negative number, a word, an empty value | Falls back to `10` |
@@ -54,12 +55,40 @@ A number without quotes is the normal way to write it. Quotes are accepted, beca
 swapping a requested `24` for the default would be worse than reading what was written. An empty value is treated as "not
 set" rather than as `0`, so a blank field cannot quietly freeze the duck.
 
-At `0` the section still animates while a question waits for an answer: the marker above the beak keeps changing, so the
-duck still says that something is waiting for you. Everything else stands still.
+At `0` the duck and the water stand still, but the speech bubble keeps working: the waiting dots and the typed joke run
+on their own timers, and the marker above the beak keeps changing while a question waits for an answer. To make the duck
+silent as well, set `silent: true`.
 
 A small speed makes the water slow as well as the duck, which at `1` means both barely move for the half-minute a crossing
 takes. The water also stops when the sidebar is narrower than the duck's drawing, because then the duck has nowhere to
-swim and the water has no crossing to pace itself against. The duck also does not ask for a joke when it cannot swim.
+swim and the water has no crossing to pace itself against. A sidebar narrower than the drawing also leaves no room for a
+bubble, so the duck does not ask for a joke there; the question marker still works.
+
+## `silent`
+
+Turns the duck's speech off. The default is `false`: after a finished turn the duck asks the model for a joke and shows
+the bubble. With `true` there is no bubble, no text and no model request. The duck and the water still move according to
+`swimSpeed`.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "silent": true } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | `false` — the duck speaks after a finished turn |
+| `false` | The duck speaks |
+| `true` | The duck is silent: no bubble, no text, no request |
+| the string `"true"`, in any case and with surrounding spaces | Read as `true` |
+| `0`, `"false"`, another word, an object | Speech stays on; a typo cannot silence the duck by accident |
+
+The option is read while the plugin loads, like the other options, so restart OpenCode after changing it. The question
+marker is independent of `silent`: while a form waits for an answer, the marker keeps moving even when the duck is silent.
+
+To get a duck that neither moves nor speaks, combine both options: `{ "swimSpeed": 0, "silent": true }`. Before this
+option existed, `swimSpeed: 0` also stopped the jokes; that is no longer the case.
 
 ## `llmTimeout`
 
@@ -116,7 +145,8 @@ Two things to know:
 - `{"plugins": ["opencode-ducksay"]}` stays valid — you only need the object form to pass options.
 
 OpenCode has its own global `animations` setting in `cli.json`, which turns off interface animations. Plugins cannot read
-it, so it does not affect the duck: `swimSpeed: 0` is the switch for the plugin's own animation.
+it, so it does not affect the duck: `swimSpeed: 0` is the switch for the duck and water animation, while `silent: true`
+is the switch for speech.
 
 ## Disabling the plugin
 

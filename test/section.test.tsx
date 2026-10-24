@@ -163,6 +163,7 @@ interface MountOptions {
   width?: number
   running?: boolean
   swimSpeed?: number
+  silent?: boolean
   sprites?: DuckSprites
   bubbleText?: string
   joke?: (signal: AbortSignal) => Promise<string | undefined>
@@ -255,6 +256,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
               primary: PRIMARY,
               renderer: setup.renderer,
               swimSpeed: options.swimSpeed ?? DEFAULT_SWIM_SPEED,
+              silent: options.silent,
               data,
               get sessionID() {
                 return session()
@@ -1307,7 +1309,7 @@ describe("rest bubble", () => {
   const rowOf = (frame: string, needle: string) =>
     frame.split("\n").findIndex((row) => row.includes(needle))
 
-  test("shows no bubble before the first swim", async () => {
+  test("shows no bubble before the first finished turn", async () => {
     const harness = await mount()
     const captured = await harness.frame()
     await harness.dispose()
@@ -1348,7 +1350,7 @@ describe("rest bubble", () => {
     await harness.dispose()
   })
 
-  test("never shows the bubble when the duck cannot swim", async () => {
+  test("shows no bubble while the zero-speed session is still working", async () => {
     const harness = await mount({ running: true, swimSpeed: 0 })
     await harness.tick(5)
     const frame = await harness.frame()
@@ -1832,7 +1834,7 @@ describe("generated joke", () => {
     }
   })
 
-  test("does not request a joke before the duck has swum", async () => {
+  test("does not request a joke before the first finished turn", async () => {
     let calls = 0
     const harness = await mount({
       running: false,
@@ -1849,24 +1851,208 @@ describe("generated joke", () => {
     await harness.dispose()
   })
 
-  test("does not request a joke when the duck cannot swim", async () => {
-    for (const options of [{ swimSpeed: 0 }, { width: DUCK_WIDTH - 2 }] as const) {
-      let calls = 0
-      const harness = await mount({
-        running: true,
-        ...options,
-        joke: async () => {
-          calls += 1
-          return "late"
-        },
-      })
-      await harness.tick(5)
-      harness.setRunning(false)
-      await harness.tick(RIGHT_EDGE + 2)
+  test("requests a joke after a turn shorter than one animation tick", async () => {
+    let calls = 0
+    const harness = await mount({
+      running: false,
+      joke: async () => {
+        calls += 1
+        return "short turn"
+      },
+    })
 
-      expect(calls).toBe(0)
-      await harness.dispose()
-    }
+    harness.setRunning(true)
+    harness.setRunning(false)
+    await settle()
+
+    expect(calls).toBe(1)
+    await harness.dispose()
+  })
+
+  test("requests a joke at zero speed and shows it without moving the duck", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, swimSpeed: 0, joke: pending.joke })
+    const before = await harness.frame()
+
+    harness.setRunning(false)
+    await settle()
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(1)
+    expect(frame).toContain("Quack.")
+    expect(columnOf(frame)).toBe(columnOf(before))
+    await harness.dispose()
+  })
+
+  test("keeps the duck silent at zero speed when silent is true", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, swimSpeed: 0, silent: true, joke: pending.joke })
+    const before = await harness.frame()
+
+    harness.setRunning(false)
+    await settle()
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(0)
+    expect(frame).not.toContain("╭")
+    expect(columnOf(frame)).toBe(columnOf(before))
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("keeps the duck silent at normal speed when silent is true", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, silent: true, joke: pending.joke })
+    await harness.advance(COLUMN_MS * 3)
+
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+
+    expect(pending.calls).toHaveLength(0)
+    expect(frame).not.toContain("╭")
+    expect(frame).not.toContain(FACING_LEFT_OPEN)
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("draws the question marker even when silent is true", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: false, silent: true, joke: pending.joke })
+
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(0)
+    expect(frame).not.toContain("╭")
+    expect(questionMarker(frame)).toBeDefined()
+    await harness.dispose()
+  })
+
+  test("draws the question marker and no bubble in a narrow lane", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({
+      running: true,
+      width: DUCK_WIDTH - 1,
+      joke: pending.joke,
+    })
+
+    harness.setRunning(false)
+    await settle()
+    harness.formCreated("form-1")
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(0)
+    expect(frame).not.toContain("╭")
+    expect(questionMarker(frame)).toBeDefined()
+    await harness.dispose()
+  })
+
+  test("does not start a deferred joke when silent is true", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({
+      running: true,
+      silent: true,
+      joke: pending.joke,
+      pendingForms: [{ id: "form-1" }],
+    })
+
+    harness.setRunning(false)
+    await settle()
+    harness.formReplied("form-1")
+    await settle()
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(0)
+    expect(frame).not.toContain("╭")
+    await harness.dispose()
+  })
+
+  test("runs the waiting and typing timers at zero speed", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, swimSpeed: 0, joke: pending.joke })
+    const before = await harness.frame()
+
+    harness.setRunning(false)
+    await settle()
+
+    // Only the waiting dots move: the duck and the water have no timer.
+    expect(harness.activeTimers()).toBe(1)
+    const two = await harness.advance(THINK_FRAME_MS)
+    expect(two).toContain("Quack..")
+    expect(columnOf(two)).toBe(columnOf(before))
+
+    pending.calls[0]!.resolve("One two three")
+    await settle()
+    expect(harness.activeTimers()).toBe(1)
+
+    const typed = await harness.advance(WORD_FRAME_MS)
+    expect(typed).toContain("One")
+    expect(columnOf(typed)).toBe(columnOf(before))
+    await harness.dispose()
+  })
+
+  test("asks again for a request interrupted by a tab switch", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, sessionID: "ses_one", joke: pending.joke })
+
+    harness.setRunning(true)
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    await settle()
+    expect(pending.calls).toHaveLength(1)
+
+    harness.setSession("ses_two")
+    await harness.frame()
+    harness.setSession("ses_one")
+    await settle()
+
+    expect(pending.calls[0]!.signal.aborted).toBe(true)
+    expect(pending.calls).toHaveLength(2)
+    pending.calls[1]!.resolve("Back again")
+    await settle()
+    await harness.tick(RIGHT_EDGE + 2)
+    const frame = await harness.advance(WORD_FRAME_MS * 4)
+    expect(frame).toContain("Back again")
+    await harness.dispose()
+  })
+
+  test("treats a turn finished in a hidden tab as speech owed", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, sessionID: "ses_one", joke: pending.joke })
+
+    harness.setRunning(true)
+    await harness.advance(COLUMN_MS * 3)
+    // Leaving without an execution event leaves the snapshot in `swim` with
+    // speech idle; the session is already free when the tab comes back.
+    harness.setSession("ses_two")
+    await harness.frame()
+    harness.setSession("ses_one")
+    await settle()
+    const frame = await harness.frame()
+
+    expect(pending.calls).toHaveLength(1)
+    expect(frame).not.toContain("Quack...")
+    await harness.dispose()
+  })
+
+  test("does not request a joke in a lane narrower than the art", async () => {
+    let calls = 0
+    const harness = await mount({
+      running: true,
+      width: DUCK_WIDTH - 2,
+      joke: async () => {
+        calls += 1
+        return "late"
+      },
+    })
+    await harness.tick(5)
+    harness.setRunning(false)
+    await harness.tick(RIGHT_EDGE + 2)
+
+    expect(calls).toBe(0)
+    await harness.dispose()
   })
 
   test("asks exactly once per turn, not once more when the duck reaches rest", async () => {

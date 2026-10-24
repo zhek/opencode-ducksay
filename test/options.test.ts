@@ -8,6 +8,7 @@ import {
   MAX_SWIM_SPEED,
   resolveContextDepth,
   resolveLlmTimeout,
+  resolveSilent,
   resolveSwimSpeed,
 } from "../src/options.ts"
 
@@ -177,5 +178,30 @@ describe("resolveContextDepth", () => {
     expect(resolveContextDepth({ llmContextDepth: "много" })).toBe(DEFAULT_CONTEXT_DEPTH)
     expect(resolveContextDepth({ llmContextDepth: true })).toBe(DEFAULT_CONTEXT_DEPTH)
     expect(resolveContextDepth({ llmContextDepth: {} })).toBe(DEFAULT_CONTEXT_DEPTH)
+  })
+})
+
+describe("resolveSilent", () => {
+  test("speaks by default when no options are passed", () => {
+    expect(resolveSilent(undefined)).toBe(false)
+    expect(resolveSilent({})).toBe(false)
+  })
+
+  test("reads the boolean true as silent", () => {
+    expect(resolveSilent({ silent: true })).toBe(true)
+  })
+
+  test("reads true written as a string, ignoring spaces and case", () => {
+    expect(resolveSilent({ silent: "true" })).toBe(true)
+    expect(resolveSilent({ silent: " TRUE " })).toBe(true)
+    expect(resolveSilent({ silent: "True" })).toBe(true)
+  })
+
+  test("keeps speech on for false and for values that are not true", () => {
+    expect(resolveSilent({ silent: false })).toBe(false)
+    expect(resolveSilent({ silent: "false" })).toBe(false)
+    expect(resolveSilent({ silent: 0 })).toBe(false)
+    expect(resolveSilent({ silent: "yes" })).toBe(false)
+    expect(resolveSilent({ silent: {} })).toBe(false)
   })
 })
