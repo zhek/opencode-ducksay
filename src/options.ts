@@ -101,3 +101,18 @@ function depthFrom(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return DEFAULT_CONTEXT_DEPTH
   return Math.min(value, MAX_CONTEXT_DEPTH)
 }
+
+/**
+ * Reads `silent` out of the plugin options.
+ *
+ * Silence is an opt-in: only the boolean `true`, or a string that says `true`,
+ * turns the duck's speech off. Everything else — a missing option, `false`,
+ * `0`, a word, an object — leaves speech on. A typo must not silence the duck
+ * by accident, which is the same defensive rule the numeric options follow.
+ */
+export function resolveSilent(options: PluginOptions | undefined): boolean {
+  const value = options?.silent
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") return value.trim().toLowerCase() === "true"
+  return false
+}

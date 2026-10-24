@@ -20,8 +20,8 @@ ___( o)< ╯
 ```
 
 The section is always ten lines tall: the heading, five rows reserved for the bubble, three rows of duck and the lower
-water line. The reserve stays empty only before the first swim; during a rest it holds the waiting dots or the joke, so
-the duck keeps the same rows throughout.
+water line. The reserve stays empty only until the first turn finishes; from the first rest after a turn it holds the
+waiting dots or the joke, so the duck keeps the same rows throughout.
 
 The plugin adds one section below OpenCode's own `Context` and `MCP` sections.
 
@@ -40,14 +40,17 @@ Add the package to `~/.config/opencode/cli.json`:
 Restart OpenCode afterwards. There is no build step.
 
 Prefix the entry with `-` to disable the plugin. See [configuration and options](docs/configuration.md) for the
-`swimSpeed`, `llmTimeout` and `llmContextDepth` options, the `session.sidebar` setting, and the cases where the sidebar is
-not shown at all.
+`swimSpeed`, `silent`, `llmTimeout` and `llmContextDepth` options, the `session.sidebar` setting, and the cases where the
+sidebar is not shown at all.
 
 ## Swimming
 
 The duck swims for as long as the session is working — not only while text arrives, but through tool calls, permission
 prompts and retries. When the turn ends it swims on to the edge of the sidebar, turns around, and stops there nose towards
 the middle. At rest it always stands at an edge, on the left one when the plugin starts.
+
+`swimSpeed` controls only the duck and the water. Whether the duck speaks is decided by whether a turn has finished and
+by the `silent` option, so a still duck can still talk.
 
 ## A question
 
@@ -66,8 +69,9 @@ finished rest bubble, and an open question keeps its marker over the same spot. 
 into another session's tab, and an old tab does not leave a duck swimming alongside the visible one: the pace stays the
 same, and the end of a turn stops the duck even after you switch away and back.
 
-The marker shows even before the first swim, and at `swimSpeed: 0` it is the only thing that moves. Only a question of the
-session shown in the panel counts: permission requests and the assistant's own questions leave the duck alone.
+The marker shows even before the first finished turn, and it keeps working at `swimSpeed: 0` and with `silent: true`. Only a
+question of the session shown in the panel counts: permission requests and the assistant's own questions leave the duck
+alone.
 
 While a question is open, the duck does not ask for a new joke. A request that is already on its way is not cancelled
 because of the question, and its answer is used once the question closes. If the turn ends while the question is still
@@ -75,7 +79,7 @@ open, the request waits for the question to close and the session to be free aga
 
 ## Rest
 
-After the duck has swum at least once, every stop ends with a speech bubble at its beak. The duck asks the model of the
+After every finished turn, the stop ends with a speech bubble at the duck's beak. The duck asks the model of the
 current session for a short joke about the session: the last few messages from you and the assistant, plus the session
 title, project and branch. The request is built from what OpenCode already has locally; tool output, file contents and
 diffs are not sent. The joke is written in the language of your last message, or in the language of the previous messages
@@ -89,20 +93,28 @@ question mark stays on screen a little longer. If the request fails, comes back 
 `Quack-quack!` instead. It does not retry until the next turn. The bubble stands on the side the duck faces — to the right
 of a duck at the left edge, to the left of a duck at the right edge — and its tail points at the beak from one column
 away. It stays for the whole rest and disappears as soon as the duck swims again, taking the waiting or typing with it and
-closing the beak. The very first rest, right after the plugin starts, has no bubble.
+closing the beak. The start-up rest, before any turn has finished, has no bubble. A turn that was shorter than one
+animation tick still gets its joke, and so does a turn at `swimSpeed: 0`; the duck does not need to move for the turn to
+count.
 
 The bubble is 29 columns wide with a 25-column text field. Text wraps by word into at most five lines; a word longer
 than the field is broken, and text that does not fit ends with `…`. A generated answer is shortened to what the bubble can
 show.
 
-There is no separate on/off switch. `llmTimeout` sets how many seconds the duck waits for the model — sixty by default,
+`silent` is the switch for speech. With `silent: true`, the duck shows no bubble and no text and does not ask the model
+for a joke; the duck and the water still move normally. Without the option, with `false`, or with any value other than
+`true`, speech stays on. Only the boolean `true` or the string `"true"` counts, so a typo or `0` does not silence the
+duck by accident.
+
+`llmTimeout` sets how many seconds the duck waits for the model — sixty by default,
 counting only the model's answer; `0`, a blank value or a value that is not a number means sixty, and anything above 120
 means 120. `llmContextDepth` sets how many recent messages of each role are read — two by default, a whole number from 1 to
 10; a value above 10 means 10, while `0`, a fraction or a value that is not a number means two. The full tables are in
 [configuration and options](docs/configuration.md).
 
-With the default `swimSpeed` the duck always swims before it rests. At `swimSpeed: 0` it never moves, so no joke is
-requested and no bubble appears; the same is true when the sidebar is narrower than the drawing.
+A narrow sidebar, narrower than the drawing, still leaves no room for a bubble: the duck does not ask for a joke there,
+though the question marker keeps working. `swimSpeed: 0` does not disable speech by itself; pair it with `silent: true`
+to get a still duck that also keeps quiet.
 
 ## The water
 
@@ -123,7 +135,8 @@ stop means one thing only.
 }
 ```
 
-The default is `10`. Set it to `0` for a duck that never moves and water that never travels.
+The default is `10`. Set it to `0` for a duck that never moves and water that never travels; speech still works unless
+you also set `silent: true`.
 
 ## Development
 

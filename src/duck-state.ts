@@ -15,24 +15,30 @@ import type { Direction } from "./lane.ts"
 /** What the duck is doing. `rest` is the only state without a travel timer. */
 export type Mode = "rest" | "swim" | "dock"
 
+/**
+ * Where the speech of the current turn is.
+ *
+ * `idle` is either the start-up rest — no turn has finished yet — or a turn in
+ * progress. `waiting` means the turn ended and a joke is owed, even if the
+ * request is held back by a form or has to be repeated after a remount.
+ * `ready` means an answer or the fallback is in the bubble.
+ */
+export type Speech = "idle" | "waiting" | "ready"
+
 export interface DuckState {
   /** Left column of the art inside the lane. */
   column: number
   direction: Direction
   /** How far the water pattern has travelled, in columns. */
   wavePhase: number
-  /** True once the duck has moved at least one column in this session. */
-  hasSwum: boolean
   mode: Mode
-  /** Whether the rest bubble has something to say (an answer or the fallback). */
-  jokeReady: boolean
+  /** Whether the bubble of the last finished turn is waiting, ready or absent. */
+  speech: Speech
   jokeText: string
   /** How many words of the joke are on screen. */
   shown: number
   /** Which frame of the waiting dots is on screen. */
   dotsStep: number
-  /** A finished turn still owes a joke that was held back or interrupted. */
-  owed: boolean
 }
 
 /** Snapshots of every session the section has shown, keyed by session id. */
@@ -44,17 +50,15 @@ export function createDuckStates(): DuckStates {
 }
 
 /** The state a session starts with before the duck has done anything. */
-export function createDuckState(init: { jokeReady: boolean; jokeText: string }): DuckState {
+export function createDuckState(init: { jokeText: string }): DuckState {
   return {
     column: 0,
     direction: 1,
     wavePhase: 0,
-    hasSwum: false,
     mode: "rest",
-    jokeReady: init.jokeReady,
+    speech: "idle",
     jokeText: init.jokeText,
     shown: 0,
     dotsStep: 0,
-    owed: false,
   }
 }
