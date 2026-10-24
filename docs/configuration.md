@@ -1,5 +1,7 @@
 # Configuration and options
 
+[Русская версия](configuration.ru.md)
+
 `opencode-ducksay` has four options: `swimSpeed`, `silent`, `llmTimeout` and `llmContextDepth`. All are optional. With
 nothing configured the duck swims at 10 columns per second, speaks, waits sixty seconds for a joke, and reads two recent
 messages of each role.

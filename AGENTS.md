@@ -7,11 +7,13 @@
 - **All code must be covered by automated tests.** New functionality and bug fixes always get one — a bug-fix test must
   reproduce the original defect (fails before the fix, passes after). An implementation task without tests is not done.
 - **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests, and update the project
-  documentation (`README.md`, `README.ru.md`, the `## Unreleased` section of `CHANGELOG.md`, config/options reference).
+  documentation (`README.md`, `README.ru.md`, `docs/configuration.md`, `docs/configuration.ru.md`, the `## Unreleased`
+  section of `CHANGELOG.md`).
   Documentation is part of the task, not a follow-up. The documentation task never bumps the version.
-- **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**. `README.ru.md` is
-  maintained in parallel with `README.md` and must change in the same task. Code, identifiers, and file names are always
-  English.
+- **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**, each
+  user-facing document with a Russian counterpart: `README.ru.md` next to `README.md` and `docs/configuration.ru.md` next
+  to `docs/configuration.md`. Both versions must change in the same task, and every document added to `docs/` gets a
+  `*.ru.md` counterpart linked from the Russian README. Code, identifiers, and file names are always English.
 - **Changelog first, versions later.** An ordinary PR never touches the version. A user-visible change is added to
   `CHANGELOG.md` under `## Unreleased` at the top of the file, under the same subheadings a released entry uses:
   `### Added`, `### Changed`, `### Fixed`, `### Removed`. Such a PR creates no `## [X.Y.Z]` heading, adds no release link,
@@ -119,8 +121,8 @@ Rules:
 - **Specs and archives are `docs:` commits.** Creating or changing a change's spec delta and archiving the change each
   go in a `docs:` commit — `docs: add <name> spec`, `docs: update <name> spec`, `docs: archive <name>` — separate from
   implementation commits.
-- **`docs:` changes `README.md` and `README.ru.md` together**, in one commit, so the two versions cannot drift apart in
-  history.
+- **`docs:` changes `README.md` and `README.ru.md` together**, and `docs/configuration.md` with
+  `docs/configuration.ru.md`, in one commit, so the versions cannot drift apart in history.
 - **Squash-merge** the PR into `main`; the PR title becomes the commit message.
 - **Archive inside the PR**, as its last commit, typed `docs:` (`docs: archive <name>`). `/opsx-archive` creates the main
   spec and moves the change to `archive/` before the merge, so `main` is consistent the moment it lands — no active
@@ -146,8 +148,8 @@ The project is spec-driven; planning and implementation are separate phases.
   scenarios. The validator matches a literal `SHALL`/`MUST` with `/\b(SHALL|MUST)\b/`, so Russian equivalents («должна»,
   «должен») do not count. Without it `openspec validate --strict <name>` exits non-zero and blocks the archive.
 - `openspec/config.yaml` `context` holds the **documentation language rule** (OpenSpec artifacts in Russian, project docs in
-  English with `README.ru.md`) and reaches both artifact generation and apply. `rules.tasks` holds what applies while
-  **authoring** `tasks.md`; `operations.apply.guidance` is the only channel that reaches the **apply** phase — put
+  English with Russian counterparts) and reaches both artifact generation and apply. `rules.tasks` holds what applies
+  while **authoring** `tasks.md`; `operations.apply.guidance` is the only channel that reaches the **apply** phase — put
   implementation-time rules there, or they will not be seen while the code is being written. `AGENTS.md` mirrors all
   three; edit the config first.
 
