@@ -1,8 +1,33 @@
 {
   "name": "opencode-ducksay",
   "version": "1.2.0",
-  "description": "Swimming ASCII duck section in the OpenCode TUI session sidebar",
+  "description": "An ASCII duck that tells jokes in the OpenCode TUI session sidebar",
   "license": "MIT",
+  "author": "Evgeniy Arapov (https://github.com/zhek)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhek/opencode-ducksay.git"
+  },
+  "homepage": "https://github.com/zhek/opencode-ducksay#readme",
+  "bugs": {
+    "url": "https://github.com/zhek/opencode-ducksay/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-tui",
+    "tui",
+    "sidebar",
+    "duck",
+    "ducksay",
+    "cowsay",
+    "ascii",
+    "mascot",
+    "companion",
+    "pet",
+    "joke",
+    "humor"
+  ],
   "type": "module",
   "exports": {
     "./tui": "./src/tui.tsx"
