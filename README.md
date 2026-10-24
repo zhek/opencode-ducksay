@@ -153,3 +153,7 @@ restart — the redrawn art shows up in the open sidebar straight away.
 Restart OpenCode after changing the animation itself. A reload re-reads the plugin and redraws the art, but a section
 that is already on screen keeps the component it was built from, so it keeps swimming the way it did before. The duck
 picks up the new behavior on the next start.
+
+## License
+
+[MIT](LICENSE) © Evgeniy Arapov
