@@ -35,9 +35,10 @@ ___( o)< ╯
 
 ## Документация
 
-- [Как ведёт себя уточка](docs/behavior.ru.md) — плавание, шутки, вопросы и вода.
-- [Конфигурация и опции](docs/configuration.ru.md) — `swimSpeed`, `silent`, `llmTimeout`, `llmContextDepth` и настройки
-  боковой панели.
+- [Как ведёт себя уточка](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.ru.md) — плавание, шутки,
+  вопросы и вода.
+- [Конфигурация и опции](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.ru.md) — `swimSpeed`,
+  `silent`, `llmTimeout`, `llmContextDepth` и настройки боковой панели.
 
 ## Лицензия
 

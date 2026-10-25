@@ -25,6 +25,19 @@ function relativeLinks(file: string): string[] {
     .map(href => href.split("#")[0]!)
 }
 
+/**
+ * The READMEs are published with the package, so they point at GitHub blobs: the
+ * npm page renders them outside this tree, where a relative `docs/…` link breaks.
+ */
+const REPO = "https://github.com/zhek/opencode-ducksay/blob/main/"
+
+function docLinks(file: string): string[] {
+  return [...text(file).matchAll(/\]\(([^)\s]+)\)/g)]
+    .map(match => match[1]!)
+    .map(href => (href.startsWith(REPO) ? href.slice(REPO.length) : href))
+    .filter(href => href.startsWith("docs/"))
+}
+
 describe("documentation links", () => {
   test.each(DOCUMENTS)("%s links only to files that exist", file => {
     for (const href of relativeLinks(file)) {
@@ -48,7 +61,7 @@ describe("Russian documentation", () => {
   })
 
   test("the Russian README links only to Russian documents", () => {
-    const links = relativeLinks("README.ru.md").filter(href => href.startsWith("docs/"))
+    const links = docLinks("README.ru.md")
     expect(links.length).toBeGreaterThan(0)
 
     for (const href of links) {
@@ -57,13 +70,13 @@ describe("Russian documentation", () => {
   })
 
   test("the Russian README links to the counterpart of every document", () => {
-    const links = relativeLinks("README.md").filter(href => href.startsWith("docs/"))
+    const links = docLinks("README.md")
     expect(links.length).toBeGreaterThan(0)
 
-    const russian = text("README.ru.md")
+    const russian = docLinks("README.ru.md")
     for (const href of links) {
       const counterpart = href.replace(/\.md$/, ".ru.md")
-      expect(russian.includes(`](${counterpart})`), `README.ru.md is missing a link to ${counterpart}`).toBe(true)
+      expect(russian, `README.ru.md is missing a link to ${counterpart}`).toContain(counterpart)
     }
   })
 
