@@ -34,9 +34,10 @@ Restart OpenCode. There is no build step.
 
 ## Documentation
 
-- [How the duck behaves](docs/behavior.md) — swimming, jokes, questions and the water.
-- [Configuration and options](docs/configuration.md) — `swimSpeed`, `silent`, `llmTimeout`, `llmContextDepth` and the
-  sidebar settings.
+- [How the duck behaves](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.md) — swimming, jokes,
+  questions and the water.
+- [Configuration and options](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.md) — `swimSpeed`,
+  `silent`, `llmTimeout`, `llmContextDepth` and the sidebar settings.
 
 ## License
 
