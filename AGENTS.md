@@ -50,6 +50,11 @@ bunx tsc --noEmit             # typecheck
 The runner is **Bun**, not Node. Rendering tests use `testRender` and `captureCharFrame` from `@opentui/solid`, which sit on
 OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching runners.
 
+Before a release, verify the packed tarball, not only the sources: `bun pm pack`, unpack it into a temporary project's
+`node_modules`, add that directory to the project's `opencode.json`, and run
+`opencode --standalone --print-logs --log-level debug`. Expect `loading plugin … index.ts`, `plugin=ducksay`, and no
+`Cannot find package 'react'`. `bun test` does not cover this — it loads sources from the repo, where `tsconfig` is read.
+
 ## No build step — do not add one
 
 OpenCode loads `index.ts` **directly as the plugin entrypoint**. There is no compile, bundle, or watch step for the plugin
@@ -81,8 +86,13 @@ binary — it is not a Node process, so a debugger on *your* Node process will n
   an absolute path or vendor it. Core plugin surface is `@opencode/plugin`.
 - While developing, put the plugin under `.opencode/plugins/<name>/` in the repo — that directory is auto-discovered, so it
   needs no `opencode.json(c)` entry. Discovery watches the file and reloads on change.
-- The package must expose the TUI entry through the **`./tui` export** (e.g. `"./tui": "./src/tui.tsx"`) next to the main
-  export, otherwise it is never auto-loaded.
+- The package must ship **both** entrypoints: `exports["."]` → a root `index.ts` with a server definition
+  (`Plugin.define({ id, setup })`) and `exports["./tui"]` → `src/tui.tsx`, plus a root `tui.ts` re-export. A project
+  `opencode.json` entry activates a plugin through the server, which cannot load a TUI-only package, and without the root
+  `tui.ts` the CLI does not find the TUI half of an installed package. Both files belong in `files`.
+- Every `.tsx` with JSX starts with `/** @jsxImportSource @opentui/solid */`. OpenCode compiles a package installed into
+  `node_modules` with the default JSX runtime and ignores the package's `tsconfig.json`, so without the pragma loading
+  fails with `Cannot find package 'react'`. That is the price of shipping sources with no build step.
 - `@opencode/plugin` is a `dependency`; **`@opentui/core`, `@opentui/solid`, and `solid-js` are `peerDependencies`**
   (only if JSX is rendered). Getting this wrong yields runtime resolution failures in the TUI, not build errors.
 - CLI plugins are loaded via **`cli.json`** (`~/.config/opencode/cli.json`) to stay active against remote servers. There is
