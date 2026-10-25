@@ -20,13 +20,15 @@ ___( o)< ╯
 
 ## Install
 
-Add the package to `~/.config/opencode/cli.json`:
+Add the package to `~/.config/opencode/cli.json` to enable it everywhere:
 
 ```json
 {
   "plugins": ["opencode-ducksay"]
 }
 ```
+
+To enable it in one project only, add the same entry to that project's `opencode.json` instead.
 
 Restart OpenCode. There is no build step.
 

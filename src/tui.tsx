@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"

@@ -32,6 +32,8 @@
   duck alone.
 - While a question is open the duck does not ask for a new joke. A request already on its way is not cancelled because of the
   question, and a turn that ended during a question asks for its joke once the question closes and the session is free.
+- A single project can enable the plugin on its own: the same `plugins` entry goes into that project's `opencode.json`
+  instead of the global `cli.json`, and the duck appears only there.
 
 ### Changed
 
