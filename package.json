@@ -30,10 +30,13 @@
   ],
   "type": "module",
   "exports": {
+    ".": "./index.ts",
     "./tui": "./src/tui.tsx"
   },
   "files": [
-    "src"
+    "src",
+    "index.ts",
+    "tui.ts"
   ],
   "scripts": {
     "test": "bun test",
