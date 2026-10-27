@@ -25,6 +25,21 @@ export type Mode = "rest" | "swim" | "dock"
  */
 export type Speech = "idle" | "waiting" | "ready"
 
+/**
+ * A cow that is currently coming out of the right wall.
+ *
+ * `columns` counts the visible step of the cameo: five out and five back.
+ * `accumulated` keeps the milliseconds that have not yet made a whole column,
+ * because the swim tick is shorter than a cow column. `held` records how many
+ * full-out intervals have already elapsed, so the cow pauses once and only then
+ * starts its return.
+ */
+export interface CowCameo {
+  columns: number
+  accumulated: number
+  held?: number
+}
+
 /** One exchange of the duck's dialogue with the user. */
 export interface DuckExchange {
   /**
@@ -57,6 +72,8 @@ export interface DuckState {
   /** Whether the bubble of the last finished turn is waiting, ready or absent. */
   speech: Speech
   jokeText: string
+  /** The rare cow cameo, when one is on its way out or back into the wall. */
+  cow?: CowCameo
   /** How many words of the joke are on screen. */
   shown: number
   /** Which frame of the waiting dots is on screen. */
