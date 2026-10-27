@@ -79,6 +79,26 @@ the question marker keeps working.
 Speech, the wait for the model and how much context goes into the prompt are configured in
 [configuration and options](configuration.md).
 
+## Talking to the duck
+
+Type `/duck` while the duck is at rest — including the first rest after start-up — or while its bubble is there, and the
+duck answers with a new joke. Add text after the command to say something to it: `/duck tell me about the build`. Your
+line and the reply join a short dialogue, and the next `/duck` continues it. `/duck` without text asks for another joke
+without adding a line from you.
+
+The duck remembers the last five exchanges: your line and its reply. A sixth exchange pushes the oldest pair out whole.
+The dialogue belongs to the session, survives switching tabs and comes back with its bubble. A new turn in that session
+starts it over, and restarting OpenCode or reloading the plugin forgets it.
+
+The command works only while the duck is free. While the session is working, a joke is loading, a question is open, the
+duck is still swimming to its edge, the sidebar is too narrow for the bubble, or no session is shown, it does nothing but
+show a short notice: `>(o ) The duck is mid-quack. Try later.` With `silent: true` it shows `<(o ) The duck keeps mum.`
+instead and never asks the model.
+
+Your text goes to the duck's joke request, not to the session: it does not appear in the transcript, and the session's
+model does not act on it. It is clipped to 500 characters and treated as words to joke about, not as instructions. A reply
+that fails, comes back empty or takes too long is not added to the dialogue.
+
 ## The water
 
 The duck is in the water, not above it: the lower line of the drawing shares a row with the first line of the water, and a

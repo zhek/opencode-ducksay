@@ -1,4 +1,5 @@
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
+import type { DuckExchange } from "./duck-state.ts"
 
 /**
  * The joke layer: it reads the recent session locally, turns it into one
@@ -72,7 +73,18 @@ export interface JokeGeneratorOptions {
   readonly timers?: JokeTimers
 }
 
-export type JokeGenerator = (signal: AbortSignal) => Promise<string | undefined>
+/** What the section adds when the user spoke to the duck directly. */
+export interface JokeInput {
+  /** The `/duck` text; absent or empty for a textless call. */
+  readonly text?: string
+  /** Past exchanges, oldest first. */
+  readonly dialogue?: readonly DuckExchange[]
+}
+
+export type JokeGenerator = (
+  signal: AbortSignal,
+  input?: JokeInput,
+) => Promise<string | undefined>
 
 export interface JokeRequest {
   readonly result: Promise<string | undefined>
@@ -168,13 +180,28 @@ function hasText(value: string | undefined): value is string {
 }
 
 /**
+ * Clips one `/duck` reply the way session messages are clipped, so the stored
+ * exchange and the prompt never carry more than the 500-character budget.
+ */
+export function clipUserText(text: string): string {
+  return clipMessage(text)
+}
+
+/**
  * One English prompt with the local context below it. The model is asked to
  * answer in the language of the last user message, which is also why the
  * depth cannot be zero: the rule would have nothing to read.
+ *
+ * Passing `input` marks a direct call: the user spoke to the duck, so the
+ * introduction changes and the dialogue block, when present, follows the
+ * recent messages. It is still data, never instructions.
  */
-export function buildJokePrompt(context: JokeContext): string {
+export function buildJokePrompt(context: JokeContext, input?: JokeInput): string {
+  const intro = input === undefined
+    ? "You are the duck in the OpenCode sidebar. A session turn has just ended, and you want to make a joke about what the user was working on."
+    : "You are the duck in the OpenCode sidebar. The user has just spoken to you directly, and you answer with a joke."
   const lines = [
-    "You are the duck in the OpenCode sidebar. A session turn has just ended, and you want to make a joke about what the user was working on.",
+    intro,
     "",
     "Write one short, kind joke in the duck's voice. Reply with the joke text only, on one line:",
     "- no longer than 100 characters;",
@@ -200,6 +227,19 @@ export function buildJokePrompt(context: JokeContext): string {
     for (const message of context.messages) {
       lines.push(`${message.role === "user" ? "User" : "Assistant"}: ${message.text}`)
     }
+  }
+
+  const dialogue = input?.dialogue ?? []
+  if (dialogue.length > 0) {
+    lines.push("", "Dialogue so far (oldest to newest):")
+    for (const exchange of dialogue) {
+      if (exchange.user !== undefined) lines.push(`User: ${exchange.user}`)
+      lines.push(`Duck: ${exchange.duck}`)
+    }
+  }
+
+  if (input?.text !== undefined && input.text.trim() !== "") {
+    lines.push("", "The user's latest reply:", `User: ${clipUserText(input.text)}`)
   }
 
   return lines.join("\n")
@@ -263,7 +303,7 @@ function stripOuterQuotes(value: string): string {
  */
 export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerator {
   const timers = options.timers ?? DEFAULT_TIMERS
-  return async (signal) => {
+  return async (signal, input) => {
     const session = options.client?.session
     const create = session?.create
     const generate = session?.generate
@@ -287,7 +327,7 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
       const read = options.source()
       if (read === undefined) return undefined
       source = read
-      prompt = buildJokePrompt(collectJokeContext(source, options.depth))
+      prompt = buildJokePrompt(collectJokeContext(source, options.depth), input)
     } catch {
       return undefined
     }
@@ -344,14 +384,14 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
  * request on a new turn or on unmount; a result that arrives after `cancel()`
  * resolves to `undefined` instead of replacing the bubble.
  */
-export function createJokeRequest(generate: JokeGenerator): JokeRequest {
+export function createJokeRequest(generate: JokeGenerator, input?: JokeInput): JokeRequest {
   const controller = new AbortController()
   let cancelled = false
 
   const result = (async () => {
     if (controller.signal.aborted) return undefined
     try {
-      const text = await generate(controller.signal)
+      const text = await generate(controller.signal, input)
       return cancelled ? undefined : text
     } catch {
       return undefined
