@@ -20,6 +20,7 @@ import {
 } from "./bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
 import {
+  appendExchange,
   createDuckState,
   createDuckStates,
   type DuckState,
@@ -27,7 +28,14 @@ import {
   type Mode,
   type Speech,
 } from "./duck-state.ts"
-import { createJokeGenerator, createJokeRequest, type JokeRequest, type JokeSource } from "./joke.ts"
+import {
+  clipUserText,
+  createJokeGenerator,
+  createJokeRequest,
+  type JokeInput,
+  type JokeRequest,
+  type JokeSource,
+} from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
@@ -87,6 +95,25 @@ const WATER_WIDTH = 160
 /** The message the duck shows at rest; tests may override it through `bubbleText`. */
 const DEFAULT_BUBBLE_TEXT = "Quack-quack!"
 
+/** The user side recorded for a `/duck` without text. */
+const SILENT_REPLY = "<silent>"
+
+/** Shown when the duck cannot take a command, with its beak wide open. */
+const BUSY_TOAST = ">(o ) The duck is mid-quack. Try later."
+
+/** Shown when `silent` is on; the duck has nothing to say by configuration. */
+const SILENT_TOAST = "<(o ) The duck keeps mum."
+
+/** What a `/duck` call did, so `setup` knows which toast to show. */
+export type DuckCommandResult = "started" | "muted" | "busy"
+
+/** The part of the mounted section the `/duck` command drives. */
+export interface DuckHandle {
+  /** The session currently displayed by this mount. */
+  readonly sessionID: string | undefined
+  duck(text: string | undefined): DuckCommandResult
+}
+
 /**
  * Where the duck's three art lines sit inside the section, top to bottom.
  *
@@ -141,7 +168,9 @@ export function Ducksay(props: {
    * Asks for one joke at the end of a turn. Without it the bubble is the static
    * `bubbleText`, which is what the geometry tests use.
    */
-  joke?: (signal: AbortSignal) => Promise<string | undefined>
+  joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
+  /** Registers the live handle the `/duck` command drives; `undefined` clears it. */
+  expose?: (handle: DuckHandle | undefined) => void
   /**
    * Per-session state that outlives this component. The plugin hands in one
    * store for its whole lifetime, so a session whose sidebar was rebuilt gets
@@ -598,8 +627,10 @@ export function Ducksay(props: {
 
     if (working) {
       // A new turn replaces the turn before it: the pending request is aborted
-      // and the new turn asks for its own joke when it ends.
+      // and the new turn asks for its own joke when it ends. A `/duck` reply
+      // belongs to the old request, so it must not survive into the new one.
       cancelJoke()
+      state.pendingReply = undefined
       setSpeech("idle")
       setJokeText(DEFAULT_BUBBLE_TEXT)
       setDotsStep(0)
@@ -615,32 +646,86 @@ export function Ducksay(props: {
     setSpeech(props.joke === undefined ? "ready" : "waiting")
   })
 
-  // Starts the request for the turn that has just ended. A missing generator
-  // means the static `bubbleText` is all this section shows.
-  const startJoke = () => {
+  /**
+   * Starts the request for the turn that has just ended, or for a direct
+   * `/duck` call when `pendingReply` says so. A missing generator means the
+   * static `bubbleText` is all this section shows.
+   *
+   * Returns false when speech is not possible at all, so the command can report
+   * `busy` instead of leaving a reply stuck in the snapshot.
+   */
+  const startJoke = (): boolean => {
     const joke = props.joke
-    if (joke === undefined || props.silent === true || limit() <= 0) return
+    if (joke === undefined || props.silent === true || limit() <= 0) return false
     cancelJoke()
+    const reply = state.pendingReply
+    const input: JokeInput | undefined = reply === undefined
+      ? undefined
+      : { text: reply === SILENT_REPLY ? undefined : reply, dialogue: state.dialogue }
+    // The request is stored before the speech signal flips: `waiting` with no
+    // request is what starts a joke on a later mount, and the effect that
+    // watches it would otherwise start a second one from this very call.
+    const current = createJokeRequest(joke, input)
+    request = current
     setSpeech("waiting")
     setJokeText(DEFAULT_BUBBLE_TEXT)
     // The dots keep their frame: a request that is repeated after the sidebar
     // was rebuilt resumes the waiting bubble instead of going back to one dot.
     // A new turn resets the frame when it starts.
     setShown(0)
-    const current = createJokeRequest(joke)
-    request = current
     void current.result.then((text) => {
       // A late answer from a cancelled request must not replace the bubble of
       // the turn that replaced it.
       if (request !== current) return
       request = undefined
-      setJokeText(text !== undefined && text.trim() !== "" ? text : DEFAULT_BUBBLE_TEXT)
+      const answer = text !== undefined && text.trim() !== "" ? text : undefined
+      setJokeText(answer ?? DEFAULT_BUBBLE_TEXT)
       // The first word is on screen in the same paint as the answer; the typing
       // timer only has to fetch the words after it.
       setShown(1)
       setSpeech("ready")
+      // The fallback is not a joke the duck said, so only a real answer joins
+      // the dialogue. A missing reply marks the automatic joke after a turn.
+      if (answer !== undefined) {
+        state.dialogue = appendExchange(
+          state.dialogue,
+          reply === undefined ? { duck: answer } : { user: reply, duck: answer },
+        )
+      }
+      state.pendingReply = undefined
     })
+    return true
   }
+
+  /**
+   * The `/duck` entry point. The checks mirror the states the section already
+   * treats as busy: a running session, a dock in progress, a pending form, a
+   * lane without room, or an answer still on its way.
+   */
+  const duck = (text: string | undefined): DuckCommandResult => {
+    if (props.silent === true) return "muted"
+    if (props.sessionID === undefined || limit() <= 0) return "busy"
+    if (frozen() || busy() || mode() !== "rest") return "busy"
+    if (speech() === "waiting" && request !== undefined) return "busy"
+    const reply = text === undefined || text.trim() === "" ? SILENT_REPLY : clipUserText(text)
+    state.pendingReply = reply
+    if (!startJoke()) {
+      state.pendingReply = undefined
+      return "busy"
+    }
+    return "started"
+  }
+
+  // The command lives in `setup`, the speech lives here. The handle is a view
+  // on this mount: `sessionID` stays reactive across tab switches, and cleanup
+  // removes it so the command cannot reach a disposed section.
+  props.expose?.({
+    get sessionID() {
+      return props.sessionID
+    },
+    duck,
+  })
+  onCleanup(() => props.expose?.(undefined))
 
   // A request belongs to the end of a turn, not to the rest pose: it starts
   // while the duck docks, so the bubble is usually ready by the time it stops.
@@ -882,6 +967,21 @@ export default Plugin.define({
     // when the displayed session changes, and a new section without this would
     // start from the left edge instead of coming back where it was.
     const states = createDuckStates()
+    // The command runs in `setup`, the speech lives in the mounted section.
+    // The handle is the bridge; it is absent while no section is mounted.
+    let handle: DuckHandle | undefined
+
+    // A new turn clears the dialogue even for a session that is not displayed:
+    // the exchanges belonged to the turn that just ended. The section filters
+    // execution events by its own session, so this listener is not duplicated.
+    const stopDialogueReset = context.data.on("session.execution.started", (event) => {
+      const sessionID = event.data?.sessionID
+      if (sessionID === undefined) return
+      const state = states.get(sessionID)
+      if (state === undefined) return
+      state.dialogue = []
+      state.pendingReply = undefined
+    })
 
     // The request reads the cache when the turn ends, not when the panel opens:
     // by then `data` has the messages the turn produced. Without a session
@@ -900,8 +1000,26 @@ export default Plugin.define({
       }
     }
 
+    // The command belongs to the keymap layer, not to the section: it stays
+    // available while the sidebar is rebuilt. It reaches the mounted section
+    // through the handle and refuses a session other than the displayed one.
+    const currentSession = () => {
+      const route = context.ui.router.current()
+      return route?.type === "session" ? route.sessionID : undefined
+    }
+    const notify = (message: string) =>
+      context.ui.toast.show({ message, variant: "info", duration: 2000 })
+    const duckCommand = (input: string | undefined) => {
+      const sessionID = currentSession()
+      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+        ? handle.duck(input)
+        : "busy"
+      if (result === "muted") notify(SILENT_TOAST)
+      else if (result === "busy") notify(BUSY_TOAST)
+    }
+
     // `slot` already returns its own teardown: it unregisters the claim.
-    return context.ui.slot({
+    const unregisterSection = context.ui.slot({
       append: "sidebar.content",
       // The host calls `render` once and keeps the input's `sessionID` getter
       // reactive. Passing that getter straight through lets the section swap
@@ -918,15 +1036,52 @@ export default Plugin.define({
           return input.sessionID
         },
         states,
+        expose: (next) => {
+          handle = next
+        },
         isRunning: () => workingNow(input.sessionID),
-        joke: (signal) => createJokeGenerator({
+        joke: (signal, jokeInput) => createJokeGenerator({
           client: context.client,
           sessionID: input.sessionID,
           source: () => jokeSource(input.sessionID),
           depth: contextDepth,
           timeoutMs: llmTimeout,
-        })(signal),
+        })(signal, jokeInput),
       }),
     })
+
+    /**
+     * Registers the slash command from inside the slot tree.
+     *
+     * `setup` runs outside the TUI's keymap provider, so calling `layer` there
+     * fails the whole plugin with `Keymap.Provider is missing`. The `app` slot
+     * is mounted under that provider and lives as long as the TUI, so the
+     * command stays available while the sidebar is rebuilt or no session is
+     * open; disposing the slot removes the layer.
+     */
+    const RegisterCommands = () => {
+      context.keymap.layer(() => ({
+        mode: "global",
+        commands: [
+          {
+            id: "ducksay.duck",
+            title: "Talk to the duck",
+            slash: { name: "duck", arguments: true },
+            run: duckCommand,
+          },
+        ],
+      }))
+      return null
+    }
+    const unregisterCommands = context.ui.slot({
+      append: "app",
+      render: () => createComponent(RegisterCommands, {}),
+    })
+
+    return () => {
+      stopDialogueReset()
+      unregisterCommands()
+      unregisterSection()
+    }
   },
 })

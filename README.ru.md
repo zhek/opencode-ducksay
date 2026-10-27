@@ -33,10 +33,14 @@ ___( o)< ╯
 
 После этого перезапустите OpenCode. Сборки нет.
 
+## Поговорить с уточкой
+
+Введите `/duck <текст>` в TUI, чтобы поговорить с уточкой. Диалог не попадает в контекст или историю сессии.
+
 ## Документация
 
 - [Как ведёт себя уточка](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.ru.md) — плавание, шутки,
-  вопросы и вода.
+  вопросы, разговор с уточкой и вода.
 - [Конфигурация и опции](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.ru.md) — `swimSpeed`,
   `silent`, `llmTimeout`, `llmContextDepth` и настройки боковой панели.
 

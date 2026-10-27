@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `/duck` talks to the duck in the sidebar: it answers with a joke, and `/duck <text>` continues a short dialogue. The duck
+  keeps the last five exchanges of the session, starts the dialogue over with each new turn, and never adds it to the
+  session's context or transcript.
+- `/duck` without text asks for another joke without a line from you. While the session is busy, a joke is loading, a
+  question is open, the duck is docking or the sidebar has no room, the command only shows a short notice; `silent: true`
+  shows that the duck keeps mum instead.
+
 ## [1.3.0] — 2026-10-25
 
 ### Added

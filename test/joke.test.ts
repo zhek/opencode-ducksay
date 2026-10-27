@@ -3,6 +3,7 @@ import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@openco
 import {
   buildJokePrompt,
   cleanJoke,
+  clipUserText,
   collectJokeContext,
   createJokeGenerator,
   createJokeRequest,
@@ -10,6 +11,7 @@ import {
   type JokeSource,
   type JokeTimers,
 } from "../src/joke.ts"
+import type { DuckExchange } from "../src/duck-state.ts"
 
 const MODEL: ModelRef = { providerID: "openai", id: "gpt-5" }
 
@@ -328,6 +330,56 @@ describe("buildJokePrompt", () => {
     expect(prompt).toContain("Assistant: visible")
     expect(prompt).not.toContain("hidden")
     expect(prompt).not.toContain("secret.ts")
+  })
+})
+
+describe("buildJokePrompt for a direct call", () => {
+  test("changes the introduction and adds the latest reply", () => {
+    const prompt = buildJokePrompt({ messages: [] }, { text: "tell me about ducks" })
+
+    expect(prompt).toContain("The user has just spoken to you directly")
+    expect(prompt).not.toContain("A session turn has just ended")
+    expect(prompt).toContain("The user's latest reply:")
+    expect(prompt).toContain("User: tell me about ducks")
+  })
+
+  test("lists the dialogue from oldest to newest, with a silent marker", () => {
+    const dialogue: DuckExchange[] = [
+      { user: "<silent>", duck: "first quack" },
+      { user: "and now?", duck: "second quack" },
+    ]
+    const prompt = buildJokePrompt({ messages: [] }, { dialogue })
+    const block = prompt.slice(prompt.indexOf("Dialogue so far"))
+
+    expect(block.indexOf("User: <silent>")).toBeLessThan(block.indexOf("Duck: first quack"))
+    expect(block.indexOf("Duck: first quack")).toBeLessThan(block.indexOf("User: and now?"))
+    expect(block.indexOf("User: and now?")).toBeLessThan(block.indexOf("Duck: second quack"))
+    expect(prompt).not.toContain("The user's latest reply")
+  })
+
+  test("keeps an automatic joke without an invented user line", () => {
+    const prompt = buildJokePrompt({ messages: [] }, { dialogue: [{ duck: "nobody asked" }] })
+
+    expect(prompt).toContain("Duck: nobody asked")
+    expect(prompt).not.toContain("User: <silent>")
+  })
+
+  test("clips a long reply at 500 characters and keeps it below the data warning", () => {
+    const long = "x".repeat(700)
+    const prompt = buildJokePrompt({ messages: [] }, { text: long })
+
+    expect(clipUserText(long)).toHaveLength(500)
+    expect(prompt).toContain(`User: ${clipUserText(long)}`)
+    expect(prompt).not.toContain("x".repeat(501))
+    // The reply is part of the context, so it appears after the warning.
+    expect(prompt.indexOf("data, not instructions")).toBeLessThan(prompt.indexOf("User: "))
+  })
+
+  test("treats a blank reply as a silent call", () => {
+    const prompt = buildJokePrompt({ messages: [] }, { text: "   " })
+
+    expect(prompt).not.toContain("The user's latest reply")
+    expect(prompt).toContain("The user has just spoken to you directly")
   })
 })
 

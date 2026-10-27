@@ -6,6 +6,7 @@ import type { CliRenderer } from "@opentui/core"
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createSignal } from "solid-js/dist/solid.js"
+import type { JSX } from "solid-js"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import type { JokeClient } from "../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
@@ -90,9 +91,31 @@ function facesRight(frame: string): boolean {
   return RIGHT_MARKERS.some((marker) => frame.includes(marker))
 }
 
+interface RegisteredCommand {
+  readonly id: string
+  readonly title?: string
+  readonly bind?: unknown
+  readonly palette?: unknown
+  readonly slash?: { readonly name: string; readonly arguments?: boolean }
+  run: (input?: string) => void
+}
+
+interface ShownToast {
+  readonly message?: string
+  readonly title?: string
+  readonly variant?: string
+  readonly duration?: number
+}
+
 interface Fake {
   readonly context: Context
   readonly claims: Record<string, unknown>[]
+  /** Commands the plugin registered in its keymap layer. */
+  readonly commands: RegisteredCommand[]
+  /** Toasts the plugin asked the host to show. */
+  readonly toasts: ShownToast[]
+  /** Points the router at another route for the command's session lookup. */
+  readonly setRoute: (route: { type: string; sessionID?: string }) => void
   /** Fires a captured `data.on` handler. */
   readonly emit: (type: string, event: unknown) => void
   readonly unsubscribed: () => number
@@ -114,9 +137,18 @@ function fake(
   } = {},
 ): Fake {
   const claims: Record<string, unknown>[] = []
-  const handlers = new Map<string, (event: any) => void>()
-  const unsubscribes = new Map<string, () => void>()
+  const handlers = new Map<string, Set<(event: any) => void>>()
+  let unsubscribedCount = 0
   const statuses = new Map<string, "idle" | "running">()
+  const commands: RegisteredCommand[] = []
+  const toasts: ShownToast[] = []
+  let route: { type: string; sessionID?: string } = { type: "session", sessionID: SESSION }
+  /**
+   * Mirrors OpenCode 2.0.17: `context.keymap.layer` reads the keymap provider
+   * and throws when called outside it, which is where `setup` runs. Only an
+   * `app` slot render is inside the provider here.
+   */
+  let inKeymapProvider = false
 
   const context = {
     options: options.options ?? {},
@@ -125,10 +157,13 @@ function fake(
     client: options.client,
     data: {
       on: (type: string, handler: (event: any) => void) => {
-        handlers.set(type, handler)
-        const unsubscribe = () => unsubscribes.set(type, unsubscribe)
-        unsubscribes.set(type, unsubscribe)
-        return unsubscribe
+        const listeners = handlers.get(type) ?? new Set()
+        listeners.add(handler)
+        handlers.set(type, listeners)
+        return () => {
+          listeners.delete(handler)
+          unsubscribedCount += 1
+        }
       },
       session: {
         status: (sessionID: string) => statuses.get(sessionID) ?? "idle",
@@ -146,10 +181,39 @@ function fake(
         },
       },
     },
+    keymap: {
+      layer: (factory: () => { commands?: readonly RegisteredCommand[] }) => {
+        if (!inKeymapProvider) throw new Error("Keymap.Provider is missing")
+        commands.push(...(factory().commands ?? []))
+        return () => {}
+      },
+    },
     ui: {
       slot: (claim: Record<string, unknown>) => {
+        if (claim.append === "app") {
+          const render = claim.render as () => unknown
+          claim = {
+            ...claim,
+            render: () => {
+              inKeymapProvider = true
+              try {
+                return render()
+              } finally {
+                inKeymapProvider = false
+              }
+            },
+          }
+        }
         claims.push(claim)
         return () => {}
+      },
+      router: {
+        current: () => route,
+      },
+      toast: {
+        show: (toast: ShownToast) => {
+          toasts.push(toast)
+        },
       },
     },
   }
@@ -157,9 +221,16 @@ function fake(
   return {
     context: context as unknown as Context,
     claims,
-    emit: (type, event) => handlers.get(type)?.(event),
-    unsubscribed: () => [...unsubscribes.values()].filter((stop) => stop()).length,
-    subscribed: () => [...handlers.keys()],
+    commands,
+    toasts,
+    setRoute: (next) => {
+      route = next
+    },
+    emit: (type, event) => {
+      for (const handler of handlers.get(type) ?? []) handler(event)
+    },
+    unsubscribed: () => unsubscribedCount,
+    subscribed: () => [...handlers.entries()].filter(([, listeners]) => listeners.size > 0).map(([type]) => type),
     statuses,
   }
 }
@@ -209,10 +280,11 @@ async function mountClaim(
     project?: Project
     branch?: string
     client?: JokeClient
+    width?: number
   } = {},
 ): Promise<Mounted> {
   const clock = new ManualClock()
-  const setup = await createTestRenderer({ width: PANEL_WIDTH, height: 12, clock })
+  const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
   const restoreTimers = useClockAsGlobalTimers(clock)
   const harness = fake({
     renderer: setup.renderer,
@@ -225,18 +297,28 @@ async function mountClaim(
   })
   if (options.running === true) harness.statuses.set(SESSION, "running")
   await plugin.setup(harness.context)
-  // The host calls the claim render once and passes a reactive input object.
+  // The host calls each claim's render once and passes a reactive input object.
   // Keeping the element instead of re-calling `render` reproduces that: the
   // section sees a changing `sessionID` without being rebuilt by the test.
   const [session, setSession] = createSignal(SESSION)
-  const claimRender = harness.claims[0]!.render as (input: unknown) => unknown
-  let element: unknown
+  const claimRender = harness.claims.find((claim) => claim.append === "sidebar.content")!
+    .render as (input: unknown) => JSX.Element
+  // The command layer is registered from the `app` slot, which the real host
+  // mounts under the keymap provider for the whole TUI lifetime. Both claims
+  // share one Solid root, the way the slot tree does.
+  const commandRender = harness.claims.find((claim) => claim.append === "app")!
+    .render as () => JSX.Element
+  let element: JSX.Element | undefined
+  let commandElement: JSX.Element | undefined
   await render(
-    () => (element ??= claimRender({
-      get sessionID() {
-        return session()
-      },
-    })),
+    () => [
+      (element ??= claimRender({
+        get sessionID() {
+          return session()
+        },
+      })),
+      (commandElement ??= commandRender()),
+    ],
     setup.renderer,
   )
 
@@ -262,6 +344,21 @@ async function mountClaim(
       await setup.dispose()
       restoreTimers()
     },
+  }
+}
+
+/**
+ * Mounts only the `app` claim, which is where the plugin registers its command.
+ * The real TUI keeps that slot under the keymap provider for its whole life.
+ */
+async function mountCommands(harness: Fake): Promise<() => Promise<void>> {
+  const setup = await createTestRenderer({ width: PANEL_WIDTH, height: 12 })
+  const commandRender = harness.claims.find((claim) => claim.append === "app")!
+    .render as () => unknown
+  let element: unknown
+  await render(() => (element ??= commandRender()), setup.renderer)
+  return async () => {
+    await setup.dispose()
   }
 }
 
@@ -295,12 +392,13 @@ async function settle() {
 }
 
 describe("setup", () => {
-  test("claims the sidebar content slot", async () => {
+  test("claims the sidebar content and the app command slots", async () => {
     const { context, claims } = fake()
     await plugin.setup(context)
 
-    expect(claims).toHaveLength(1)
+    expect(claims).toHaveLength(2)
     expect(claims[0]!.append).toBe("sidebar.content")
+    expect(claims[1]!.append).toBe("app")
   })
 
   test("appends, so the section lands below the built-in sections", async () => {
@@ -322,13 +420,339 @@ describe("setup", () => {
     await cleanup()
   })
 
-  test("leaves no subscription behind, since the section owns its own", async () => {
+  test("subscribes only to the dialogue reset and drops it on teardown", async () => {
     const harness = fake()
     const cleanup = (await plugin.setup(harness.context)) as () => void
 
-    expect(harness.subscribed()).toEqual([])
+    expect(harness.subscribed()).toEqual(["session.execution.started"])
     await cleanup()
-    expect(harness.unsubscribed()).toBe(0)
+    expect(harness.unsubscribed()).toBe(1)
+  })
+})
+
+describe("the /duck command", () => {
+  const BUSY_TOAST = {
+    message: ">(o ) The duck is mid-quack. Try later.",
+    variant: "info",
+    duration: 2000,
+  }
+  const SILENT_TOAST = {
+    message: "<(o ) The duck keeps mum.",
+    variant: "info",
+    duration: 2000,
+  }
+
+  const duckCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.slash?.name === "duck")!
+
+  test("registers a slash-only command from the app slot, not from setup", async () => {
+    const harness = fake()
+    // `setup` has no keymap provider: calling `layer` there throws, as it does
+    // in OpenCode 2.0.17 and leaves the whole plugin unloaded.
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    expect(harness.commands).toHaveLength(0)
+    const unmount = await mountCommands(harness)
+
+    try {
+      const command = duckCommand(harness)
+      expect(command.id).toBe("ducksay.duck")
+      expect(command.slash).toEqual({ name: "duck", arguments: true })
+      expect(command.bind).toBeUndefined()
+      expect(command.palette).toBeUndefined()
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("shows the busy toast when no section is mounted yet", async () => {
+    const harness = fake()
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      duckCommand(harness).run("hello")
+
+      expect(harness.toasts).toEqual([BUSY_TOAST])
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("passes the command text into the prompt as a direct call", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ session: sessionInfo(), client: deferred.client })
+
+    try {
+      duckCommand(mounted.harness).run("hello duck")
+      await settle()
+
+      expect(deferred.calls).toHaveLength(1)
+      expect(deferred.calls[0]!.input.prompt).toContain("The user has just spoken to you directly")
+      expect(deferred.calls[0]!.input.prompt).toContain("User: hello duck")
+      expect(mounted.harness.toasts).toHaveLength(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast while the session is working", async () => {
+    const mounted = await mountClaim({ running: true })
+
+    try {
+      duckCommand(mounted.harness).run("hello")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast while the joke is loading", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ session: sessionInfo(), client: deferred.client })
+
+    try {
+      duckCommand(mounted.harness).run("first")
+      await settle()
+      expect(deferred.calls).toHaveLength(1)
+
+      duckCommand(mounted.harness).run("second")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+      expect(deferred.calls).toHaveLength(1)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast while a question is open", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ session: sessionInfo(), client: deferred.client })
+
+    try {
+      mounted.harness.emit("form.created", {
+        data: { form: { id: "question-1", sessionID: SESSION, title: "Question", fields: [] } },
+      })
+      await settle()
+      await mounted.frame()
+
+      duckCommand(mounted.harness).run("hello")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+      expect(deferred.calls).toHaveLength(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast while the duck is docking", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), client: deferred.client })
+
+    try {
+      await mounted.swim(3)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await settle()
+      const callsBefore = deferred.calls.length
+
+      duckCommand(mounted.harness).run("hello")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+      expect(deferred.calls).toHaveLength(callsBefore)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast when the lane is narrower than the art", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ width: 5, session: sessionInfo(), client: deferred.client })
+
+    try {
+      duckCommand(mounted.harness).run("hello")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+      expect(deferred.calls).toHaveLength(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the busy toast when the router is not on a session", async () => {
+    const mounted = await mountClaim()
+
+    try {
+      mounted.harness.setRoute({ type: "home" })
+      duckCommand(mounted.harness).run("hello")
+
+      expect(mounted.harness.toasts).toEqual([BUSY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("follows the displayed session", async () => {
+    const mounted = await mountClaim({ session: sessionInfo() })
+
+    try {
+      mounted.setSession(OTHER_SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: OTHER_SESSION })
+      duckCommand(mounted.harness).run("for the other tab")
+      await settle()
+      await mounted.frame()
+
+      expect(mounted.harness.toasts).toHaveLength(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("keeps mum instead of asking when silent is on, busy or not", async () => {
+    for (const running of [false, true]) {
+      const deferred = deferredClient()
+      const mounted = await mountClaim({
+        running,
+        session: sessionInfo(),
+        client: deferred.client,
+        options: { silent: true },
+      })
+
+      try {
+        duckCommand(mounted.harness).run("hello")
+
+        expect(deferred.calls).toHaveLength(0)
+        expect(mounted.harness.toasts).toEqual([SILENT_TOAST])
+      } finally {
+        await mounted.close()
+      }
+    }
+  })
+})
+
+describe("dialogue lifecycle through the plugin", () => {
+  const duckCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.slash?.name === "duck")!
+
+  test("clears the dialogue when the shown session starts a new turn", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), client: deferred.client })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await settle()
+      expect(deferred.calls).toHaveLength(1)
+      deferred.calls[0]!.resolve({ text: "first joke" })
+      await settle()
+
+      duckCommand(mounted.harness).run("remember this")
+      await settle()
+      expect(deferred.calls).toHaveLength(2)
+      deferred.calls[1]!.resolve({ text: "second joke" })
+      await settle()
+
+      mounted.harness.emit("session.execution.started", forSession)
+      await settle()
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await settle()
+
+      expect(deferred.calls).toHaveLength(3)
+      const prompt = deferred.calls[2]!.input.prompt
+      expect(prompt).not.toContain("first joke")
+      expect(prompt).not.toContain("second joke")
+      expect(prompt).not.toContain("remember this")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("clears a background session's dialogue on its new turn", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ session: sessionInfo(), client: deferred.client })
+
+    try {
+      duckCommand(mounted.harness).run("keep me")
+      await settle()
+      deferred.calls[0]!.resolve({ text: "kept joke" })
+      await settle()
+
+      mounted.setSession(OTHER_SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: OTHER_SESSION })
+      await settle()
+      mounted.harness.emit("session.execution.started", forSession)
+      await settle()
+      mounted.setSession(SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: SESSION })
+      await settle()
+
+      duckCommand(mounted.harness).run("again")
+      await settle()
+
+      expect(deferred.calls).toHaveLength(2)
+      expect(deferred.calls[1]!.input.prompt).not.toContain("kept joke")
+      expect(deferred.calls[1]!.input.prompt).not.toContain("keep me")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("keeps the dialogue across a tab switch and back", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({ session: sessionInfo(), client: deferred.client })
+
+    try {
+      duckCommand(mounted.harness).run("keep me")
+      await settle()
+      deferred.calls[0]!.resolve({ text: "kept joke" })
+      await settle()
+
+      mounted.setSession(OTHER_SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: OTHER_SESSION })
+      await settle()
+      mounted.setSession(SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: SESSION })
+      await settle()
+
+      duckCommand(mounted.harness).run("next")
+      await settle()
+
+      expect(deferred.calls).toHaveLength(2)
+      const prompt = deferred.calls[1]!.input.prompt
+      expect(prompt).toContain("User: keep me")
+      expect(prompt).toContain("Duck: kept joke")
+      expect(prompt).toContain("User: next")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("starts a fresh plugin lifetime with an empty dialogue", async () => {
+    const first = deferredClient()
+    const one = await mountClaim({ session: sessionInfo(), client: first.client })
+    try {
+      duckCommand(one.harness).run("remember me")
+      await settle()
+      first.calls[0]!.resolve({ text: "first joke" })
+      await settle()
+    } finally {
+      await one.close()
+    }
+
+    const second = deferredClient()
+    const two = await mountClaim({ session: sessionInfo(), client: second.client })
+    try {
+      duckCommand(two.harness).run("hello again")
+      await settle()
+
+      const prompt = second.calls[0]!.input.prompt
+      expect(prompt).not.toContain("first joke")
+      expect(prompt).not.toContain("remember me")
+    } finally {
+      await two.close()
+    }
   })
 })
 

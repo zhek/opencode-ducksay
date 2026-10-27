@@ -25,6 +25,28 @@ export type Mode = "rest" | "swim" | "dock"
  */
 export type Speech = "idle" | "waiting" | "ready"
 
+/** One exchange of the duck's dialogue with the user. */
+export interface DuckExchange {
+  /**
+   * What the user said. `<silent>` marks a `/duck` without text; absent for the
+   * automatic joke that follows a turn, which nobody asked for.
+   */
+  readonly user?: string
+  readonly duck: string
+}
+
+/** How many exchanges the dialogue keeps. */
+export const DIALOGUE_LIMIT = 5
+
+/** Adds an exchange, dropping the oldest one together with its reply. */
+export function appendExchange(
+  dialogue: readonly DuckExchange[],
+  exchange: DuckExchange,
+): DuckExchange[] {
+  const next = [...dialogue, exchange]
+  return next.length > DIALOGUE_LIMIT ? next.slice(next.length - DIALOGUE_LIMIT) : next
+}
+
 export interface DuckState {
   /** Left column of the art inside the lane. */
   column: number
@@ -39,6 +61,13 @@ export interface DuckState {
   shown: number
   /** Which frame of the waiting dots is on screen. */
   dotsStep: number
+  /** Exchanges with the user, oldest first; at most `DIALOGUE_LIMIT`. */
+  dialogue: DuckExchange[]
+  /**
+   * The user side of the request in flight: the `/duck` reply or `<silent>`.
+   * Absent for the automatic joke that follows a turn.
+   */
+  pendingReply?: string
 }
 
 /** Snapshots of every session the section has shown, keyed by session id. */
@@ -60,5 +89,6 @@ export function createDuckState(init: { jokeText: string }): DuckState {
     jokeText: init.jokeText,
     shown: 0,
     dotsStep: 0,
+    dialogue: [],
   }
 }

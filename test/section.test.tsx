@@ -19,11 +19,12 @@ const Conditional = Show as unknown as (props: {
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { createDuckStates, type DuckStates } from "../src/duck-state.ts"
+import type { JokeInput } from "../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
-import { Ducksay, type DuckSprites } from "../src/tui.tsx"
+import { Ducksay, type DuckCommandResult, type DuckHandle, type DuckSprites } from "../src/tui.tsx"
 
 /** The session the mounted panel belongs to. */
 const SESSION = "ses_duck"
@@ -132,6 +133,10 @@ interface Harness {
   readonly setSession: (sessionID: string) => void
   /** Emits one host event through the same subscription the section uses. */
   readonly emit: (type: string, event: unknown) => void
+  /** Drives the section the way the `/duck` command does. */
+  readonly duck: (text?: string) => DuckCommandResult | undefined
+  /** The session the live handle belongs to; absent once unmounted. */
+  readonly handleSessionID: () => string | undefined
   /** Form events for the mounted session unless another session is passed. */
   readonly formCreated: (id: string, sessionID?: string) => void
   readonly formReplied: (id: string, sessionID?: string) => void
@@ -166,7 +171,7 @@ interface MountOptions {
   silent?: boolean
   sprites?: DuckSprites
   bubbleText?: string
-  joke?: (signal: AbortSignal) => Promise<string | undefined>
+  joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
   sessionID?: string
   pendingForms?: readonly PendingForm[]
   /**
@@ -195,6 +200,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
   let formsReady = options.formsReady ?? true
   let setRunning = (_value: boolean) => {}
   let activeTimers = 0
+  let handle: DuckHandle | undefined
 
   const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
   const removeForm = (id: string, sessionID: string) => {
@@ -274,6 +280,9 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
               bubbleText: options.bubbleText,
               joke: options.joke,
               states: options.states,
+              expose: (next) => {
+                handle = next
+              },
             })
         },
       })
@@ -307,6 +316,8 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     setRunning,
     setSession,
     emit,
+    duck: (text) => handle?.duck(text),
+    handleSessionID: () => handle?.sessionID,
     formCreated,
     formReplied,
     formCancelled,
@@ -2192,6 +2203,259 @@ describe("generated joke", () => {
     await harness.unmount()
     expect(signal.aborted).toBe(true)
     expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+})
+
+describe("duck command", () => {
+  interface PendingJoke {
+    readonly signal: AbortSignal
+    readonly input: JokeInput | undefined
+    resolve: (value: string | undefined) => void
+    reject: (error: Error) => void
+  }
+
+  function controlledJoke() {
+    const calls: PendingJoke[] = []
+    const joke = (signal: AbortSignal, input?: JokeInput) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        calls.push({ signal, input, resolve, reject })
+      })
+    return { joke, calls }
+  }
+
+  async function settle() {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  }
+
+  /** Starts a turn, ends it and docks, leaving the duck at rest. */
+  async function dockWith(
+    joke: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>,
+    options: MountOptions = {},
+  ) {
+    const harness = await mount({ running: true, joke, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    await harness.tick(RIGHT_EDGE + 2)
+    return harness
+  }
+
+  test("asks for a joke at the start-up rest", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ joke: pending.joke })
+
+    expect(harness.duck("hello")).toBe("started")
+    await settle()
+
+    expect(pending.calls).toHaveLength(1)
+    expect(pending.calls[0]!.input).toEqual({ text: "hello", dialogue: [] })
+    expect(await harness.frame()).toContain("Quack.")
+    await harness.dispose()
+  })
+
+  test("replaces a finished joke, keeping the dialogue", async () => {
+    const pending = controlledJoke()
+    const harness = await dockWith(pending.joke)
+    pending.calls[0]!.resolve("first automatic joke")
+    await settle()
+    expect(await harness.frame()).toContain("first")
+
+    expect(harness.duck("tell me more")).toBe("started")
+    await settle()
+
+    expect(pending.calls).toHaveLength(2)
+    expect(pending.calls[1]!.input).toEqual({
+      text: "tell me more",
+      dialogue: [{ duck: "first automatic joke" }],
+    })
+    expect(await harness.frame()).toContain("Quack.")
+    await harness.dispose()
+  })
+
+  test("replaces a joke that is still being typed", async () => {
+    const pending = controlledJoke()
+    const harness = await dockWith(pending.joke)
+    pending.calls[0]!.resolve("alpha beta gamma delta")
+    await settle()
+    await harness.advance(WORD_FRAME_MS)
+
+    expect(harness.duck("again")).toBe("started")
+    await settle()
+
+    expect(pending.calls).toHaveLength(2)
+    const frame = await harness.frame()
+    expect(frame).toContain("Quack.")
+    expect(frame).not.toContain("alpha")
+    await harness.dispose()
+  })
+
+  test("is too busy while the session is working", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, joke: pending.joke })
+
+    expect(harness.duck("hello")).toBe("busy")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+    await harness.dispose()
+  })
+
+  test("is too busy while the joke is loading", async () => {
+    const pending = controlledJoke()
+    const harness = await dockWith(pending.joke)
+
+    expect(harness.duck("hello")).toBe("busy")
+    await settle()
+    expect(pending.calls).toHaveLength(1)
+    await harness.dispose()
+  })
+
+  test("is too busy while a question is open", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ joke: pending.joke })
+    harness.formCreated("question-1")
+    await settle()
+
+    expect(harness.duck("hello")).toBe("busy")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+    await harness.dispose()
+  })
+
+  test("is too busy while the duck is docking", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, joke: pending.joke })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    await harness.advance(TICK_MS)
+
+    expect(harness.duck("hello")).toBe("busy")
+    await harness.dispose()
+  })
+
+  test("is too busy when the lane is narrower than the art", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ width: 5, joke: pending.joke })
+
+    expect(harness.duck("hello")).toBe("busy")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+    await harness.dispose()
+  })
+
+  test("keeps mum without a request when silent is on", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ silent: true, joke: pending.joke })
+
+    expect(harness.duck("hello")).toBe("muted")
+    await settle()
+    expect(pending.calls).toHaveLength(0)
+    await harness.dispose()
+  })
+
+  test("saves an automatic joke without a user line", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await dockWith(pending.joke, { states })
+    pending.calls[0]!.resolve("auto joke")
+    await settle()
+
+    expect(states.get(SESSION)?.dialogue).toEqual([{ duck: "auto joke" }])
+    await harness.dispose()
+  })
+
+  test("saves a direct reply as a user and a duck line", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, joke: pending.joke })
+
+    expect(harness.duck("  hello   duck  ")).toBe("started")
+    await settle()
+    pending.calls[0]!.resolve("manual joke")
+    await settle()
+
+    expect(pending.calls[0]!.input?.text).toBe("hello duck")
+    expect(states.get(SESSION)?.dialogue).toEqual([{ user: "hello duck", duck: "manual joke" }])
+    await harness.dispose()
+  })
+
+  test("saves a textless call as <silent>", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, joke: pending.joke })
+
+    expect(harness.duck()).toBe("started")
+    await settle()
+    expect(pending.calls[0]!.input?.text).toBeUndefined()
+    pending.calls[0]!.resolve("a joke anyway")
+    await settle()
+
+    expect(states.get(SESSION)?.dialogue).toEqual([{ user: "<silent>", duck: "a joke anyway" }])
+    await harness.dispose()
+  })
+
+  test("clips a long direct reply before storing it", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, joke: pending.joke })
+
+    expect(harness.duck("я".repeat(600))).toBe("started")
+    await settle()
+    pending.calls[0]!.resolve("clipped joke")
+    await settle()
+
+    const user = states.get(SESSION)!.dialogue[0]!.user!
+    expect(user).toHaveLength(500)
+    await harness.dispose()
+  })
+
+  test("does not save a failed or empty answer", async () => {
+    const states = createDuckStates()
+    const pending = controlledJoke()
+    const harness = await mount({ states, joke: pending.joke })
+
+    expect(harness.duck("hello")).toBe("started")
+    await settle()
+    pending.calls[0]!.resolve(undefined)
+    await settle()
+
+    expect(states.get(SESSION)?.dialogue).toEqual([])
+    expect(await harness.frame()).toContain("Quack-quack!")
+    await harness.dispose()
+  })
+
+  test("keeps five exchanges and drops the oldest whole", async () => {
+    const states = createDuckStates()
+    let next = 0
+    const harness = await mount({ states, joke: async () => `joke ${(next += 1)}` })
+
+    for (let index = 1; index <= 6; index += 1) {
+      expect(harness.duck(`question ${index}`)).toBe("started")
+      await settle()
+    }
+
+    const dialogue = states.get(SESSION)!.dialogue
+    expect(dialogue).toHaveLength(5)
+    expect(dialogue.map((entry) => entry.user)).toEqual([
+      "question 2",
+      "question 3",
+      "question 4",
+      "question 5",
+      "question 6",
+    ])
+    expect(dialogue[0]!.duck).toBe("joke 2")
+    await harness.dispose()
+  })
+
+  test("removes the handle when the section unmounts", async () => {
+    const harness = await mount({ joke: async () => "a joke" })
+    expect(harness.handleSessionID()).toBe(SESSION)
+    expect(harness.duck("hello")).toBe("started")
+    await settle()
+
+    await harness.unmount()
+
+    expect(harness.handleSessionID()).toBeUndefined()
+    expect(harness.duck("hello")).toBeUndefined()
     await harness.dispose()
   })
 })
