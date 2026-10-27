@@ -18,6 +18,15 @@ import {
   wrapBubbleText,
   type BubbleSide,
 } from "./bubble.ts"
+import {
+  advanceCow,
+  COW_CHANCE,
+  cowEmergence,
+  cowFrame,
+  COW_TONGUE_ROW,
+  COW_WIDTH,
+  crossedMidline,
+} from "./cow.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
 import {
   appendExchange,
@@ -164,6 +173,11 @@ export function Ducksay(props: {
   sprites?: DuckSprites
   /** The rest bubble's message; tests change it, the plugin never does. */
   bubbleText?: string
+  /**
+   * Chance source for the rare cow cameo. The plugin leaves it out and uses
+   * `Math.random`; tests pass a constant so a crossing is deterministic.
+   */
+  random?: () => number
   /**
    * Asks for one joke at the end of a turn. Without it the bubble is the static
    * `bubbleText`, which is what the geometry tests use.
@@ -373,6 +387,9 @@ export function Ducksay(props: {
     const reach = limit()
     state.column = Math.min(Math.max(state.column, 0), reach)
     state.direction = state.column * 2 <= reach ? 1 : -1
+    // The cow only belongs to the swim. Reaching rest removes it rather than
+    // leaving a frozen cameo over a duck that has stopped.
+    state.cow = undefined
   }
 
   /**
@@ -433,6 +450,24 @@ export function Ducksay(props: {
     // Every row is rebuilt on every paint, which is also what clears a bubble
     // that has just gone away; the reserve above the duck stays blank otherwise.
     const rows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
+
+    // The cow is drawn first, so the duck stays in front if a sprite ever
+    // reaches the reserve. It is pinned to the right wall: `e` columns are
+    // visible, and its left edge moves left as it comes out.
+    if (mode() !== "rest" && state.cow !== undefined) {
+      const emergence = cowEmergence(state.cow.columns)
+      if (emergence > 0) {
+        const left = laneWidth() - emergence
+        // The mouth stays closed on the way out. The tongue appears only when
+        // the cow is fully out and stays through the hold and the return.
+        const tongue = state.cow.columns >= COW_WIDTH
+        for (const line of cowFrame(emergence, tongue)) {
+          const at = line.row === COW_TONGUE_ROW ? left + 1 : left
+          rows[line.row] = overlay(rows[line.row] ?? "", line.text, at)
+        }
+      }
+    }
+
     rows[HEAD_ROW] = indent + (sprite[0] ?? "")
     rows[BEAK_ROW] = indent + (sprite[1] ?? "")
     rows[BODY_ROW] = overWater(waterLine(0), sprite[2] ?? "")
@@ -604,12 +639,19 @@ export function Ducksay(props: {
   createEffect(() => {
     const working = busy()
     const swimSpeed = props.swimSpeed ?? DEFAULT_SWIM_SPEED
-    if (working) {
-      setMode("swim")
+    if (swimSpeed <= 0) {
+      // A duck that never swims has no crossing to make a cow come out of, so
+      // an active cameo is dropped instead of standing over a still duck.
+      if (state.cow !== undefined) {
+        state.cow = undefined
+        paint()
+        props.renderer?.requestRender()
+      }
+      setMode(working ? "swim" : "rest")
       return
     }
-    if (swimSpeed <= 0) {
-      setMode("rest")
+    if (working) {
+      setMode("swim")
       return
     }
     setMode((current) => (current === "swim" ? "dock" : current))
@@ -884,15 +926,34 @@ export function Ducksay(props: {
         renderer.requestRender()
         return
       }
+
+      // An existing cow moves before the duck. A cow started by this tick's
+      // crossing is therefore still invisible until the next tick, which gives
+      // it the same short first delay as the five-out, hold, five-back cycle.
+      state.cow = advanceCow(state.cow, TICK_MS, swimSpeed)
+
       accumulated += TICK_MS
       const interval = msPerColumn(swimSpeed)
       let budget = MAX_COLUMNS_PER_TICK
       while (accumulated >= interval && budget > 0) {
         accumulated -= interval
         budget -= 1
+        const from = state.column
+        const heading = state.direction
         const move = moveTowardsEdge(state.column, state.direction, reach)
         state.column = move.column
         state.direction = move.direction
+
+        // The cow is a rare event of a leftward crossing, not of a timer of its
+        // own. Every crossing consumes one roll even while a cow is already
+        // out; the hit is then ignored so only one cow can be on screen.
+        if (mode() === "swim" && heading === -1 && crossedMidline(from, move.column, reach)) {
+          const hit = (props.random ?? Math.random)() < COW_CHANCE
+          if (hit && state.cow === undefined) {
+            state.cow = { columns: 0, accumulated: 0 }
+          }
+        }
+
         if (move.turned) {
           // The turn spends the rest of the tick. Without this the leftover
           // time carries straight into the next column of the new direction and

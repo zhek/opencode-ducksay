@@ -18,7 +18,7 @@ const Conditional = Show as unknown as (props: {
 }) => unknown
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
-import { createDuckStates, type DuckStates } from "../src/duck-state.ts"
+import { createDuckState, createDuckStates, type DuckStates } from "../src/duck-state.ts"
 import type { JokeInput } from "../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
@@ -172,6 +172,8 @@ interface MountOptions {
   sprites?: DuckSprites
   bubbleText?: string
   joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
+  /** Makes the 1/50 cow roll deterministic in a test. */
+  random?: () => number
   sessionID?: string
   pendingForms?: readonly PendingForm[]
   /**
@@ -279,6 +281,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
               sprites: options.sprites,
               bubbleText: options.bubbleText,
               joke: options.joke,
+              random: options.random,
               states: options.states,
               expose: (next) => {
                 handle = next
@@ -542,6 +545,484 @@ describe("swimming", () => {
       expect(columnOf(frame)).toBeGreaterThanOrEqual(0)
       expect(columnOf(frame)).toBeLessThanOrEqual(RIGHT_EDGE)
     }
+  })
+})
+
+describe("cow cameo trigger", () => {
+  /** The 37-column lane the cow's coordinates are specified against. */
+  const LANE = PANEL_CONTENT_WIDTH
+  const LIMIT = LANE - DUCK_WIDTH
+  /**
+   * The frame on which a leftward 15 -> 14 crossing happens. The first frame
+   * after mounting only starts the swimming timer, so one frame is added to
+   * the number of columns the duck has to cover.
+   */
+  const CROSSING = LIMIT + Math.ceil(LIMIT / 2) + 1
+
+  const hasCow = (frame: string) => frame.includes("^")
+  const rowsOf = (frame: string) => frame.split("\n")
+  const cowTopRow = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("^"))
+  /** The cow's own rows, from its top line through the tongue row. */
+  const cowSnapshot = (frame: string) => {
+    const rows = rowsOf(frame)
+    const top = cowTopRow(frame)
+    return [rows[top], rows[top + 1], rows[top + 2], rows[top + 3]?.slice(LANE - 5)]
+  }
+  const waterRows = (frame: string) => rowsOf(frame).filter((row) => row.includes("~"))
+
+  test("starts a cow when the duck crosses the middle leftward", async () => {
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+
+    const atCrossing = await harness.tick(CROSSING)
+    expect(rolls).toBe(1)
+    // The roll starts the cow at zero visible columns: the trigger frame is
+    // still empty.
+    expect(hasCow(atCrossing)).toBe(false)
+
+    const full = await harness.tick(15)
+    expect(rolls).toBe(1)
+    expect(full).toContain("^__^")
+    expect(full).toContain("(oO)\\")
+    expect(full).toContain("(__)\\")
+    expect(full).toContain("U")
+    await harness.dispose()
+  })
+
+  test("draws the whole cycle in the expected swim frames", async () => {
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      random: () => 0,
+    })
+    const height = (await harness.frame()).split("\n").length
+
+    const atCrossing = await harness.tick(CROSSING)
+    expect(hasCow(atCrossing)).toBe(false)
+
+    // At swimSpeed 10 the cow spends three frames on each column: first
+    // visible on +3, e = 2, 3, 4 on +6, +9, +12, fully out on +15, held on +18,
+    // last tongue on +27, last column on +30, and gone on +33.
+    const first = await harness.tick(3)
+    const firstRows = rowsOf(first)
+    const firstTop = cowTopRow(first)
+    expect(harness.activeTimers()).toBe(1)
+    expect(firstTop).toBe(firstRows.findIndex((row) => row.includes(HEAD)) - 4)
+    expect(firstRows[firstTop]!.endsWith("^")).toBe(true)
+    expect(firstRows[firstTop + 1]!.endsWith("(")).toBe(true)
+    expect(firstRows[firstTop + 2]!.endsWith("(")).toBe(true)
+    expect(firstRows[firstTop + 3]!.trim()).toBe("")
+    expect(first).not.toContain("U")
+
+    const e2Out = await harness.tick(3)
+    const e3Out = await harness.tick(3)
+    const e4Out = await harness.tick(3)
+    for (const frame of [e2Out, e3Out, e4Out]) {
+      expect(hasCow(frame)).toBe(true)
+      expect(frame).not.toContain("U")
+    }
+
+    const full = await harness.tick(3)
+    const fullRows = rowsOf(full)
+    const fullTop = cowTopRow(full)
+    expect(fullTop).toBe(fullRows.findIndex((row) => row.includes(HEAD)) - 4)
+    expect(fullRows[fullTop]!.indexOf("^__^")).toBe(LANE - 5)
+    // The top line is one column shorter than the face, so the last lane column
+    // stays blank at the cow's full reach.
+    expect(fullRows[fullTop]![LANE - 1]).toBe(" ")
+    expect(fullRows[fullTop + 1]!.indexOf("(oO)\\")).toBe(LANE - 5)
+    expect(fullRows[fullTop + 2]!.indexOf("(__)\\")).toBe(LANE - 5)
+    expect(fullRows[fullTop + 3]!.indexOf("U")).toBe(LANE - 4)
+    expect(fullRows.length).toBe(height)
+    expect(columnOf(full)).not.toBe(columnOf(atCrossing))
+
+    const held = await harness.tick(3)
+    expect(cowSnapshot(held)).toEqual(cowSnapshot(full))
+    expect(held).toContain("U")
+
+    const e4 = rowsOf(await harness.tick(3))
+    const top4 = e4.findIndex((row) => row.includes("^"))
+    expect(e4[top4]!.indexOf("^__^")).toBe(LANE - 4)
+    expect(e4[top4 + 1]!.indexOf("(oO)")).toBe(LANE - 4)
+    expect(e4[top4 + 2]!.indexOf("(__)")).toBe(LANE - 4)
+    expect(e4[top4 + 3]!.indexOf("U")).toBe(LANE - 3)
+
+    const e3 = rowsOf(await harness.tick(3))
+    const top3 = e3.findIndex((row) => row.includes("^"))
+    expect(e3[top3]!.endsWith("^__")).toBe(true)
+    expect(e3[top3 + 1]!.endsWith("(oO")).toBe(true)
+    expect(e3[top3 + 2]!.endsWith("(__")).toBe(true)
+    expect(e3[top3 + 3]!.indexOf("U")).toBe(LANE - 2)
+
+    const e2 = rowsOf(await harness.tick(3))
+    const top2 = e2.findIndex((row) => row.includes("^"))
+    expect(e2[top2]!.endsWith("^_")).toBe(true)
+    expect(e2[top2 + 1]!.endsWith("(o")).toBe(true)
+    expect(e2[top2 + 2]!.endsWith("(_")).toBe(true)
+    expect(e2[top2 + 3]!.indexOf("U")).toBe(LANE - 1)
+
+    const last = await harness.tick(3)
+    const lastRows = rowsOf(last)
+    const lastTop = cowTopRow(last)
+    expect(lastRows[lastTop]!.endsWith("^")).toBe(true)
+    expect(lastRows[lastTop + 1]!.endsWith("(")).toBe(true)
+    expect(lastRows[lastTop + 2]!.endsWith("(")).toBe(true)
+    expect(lastRows[lastTop + 3]!.trim()).toBe("")
+    expect(last).not.toContain("U")
+
+    const gone = await harness.tick(3)
+    expect(hasCow(gone)).toBe(false)
+    expect(gone).not.toContain("U")
+    expect(rowsOf(gone).length).toBe(height)
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("runs the cycle in fewer frames at 120 and adds no second timer", async () => {
+    const states = createDuckStates()
+    const state = createDuckState({ jokeText: "Quack-quack!" })
+    state.column = 15
+    state.direction = -1
+    state.mode = "swim"
+    states.set(SESSION, state)
+
+    let firstRoll = true
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      swimSpeed: 120,
+      random: () => {
+        rolls += 1
+        const hit = firstRoll
+        firstRoll = false
+        return hit ? 0 : 1
+      },
+    })
+
+    let seen = false
+    let gone = false
+    let visibleFrames = 0
+    for (let frame = 0; frame < 8; frame += 1) {
+      const next = await harness.tick(1)
+      if (hasCow(next)) {
+        seen = true
+        visibleFrames += 1
+      } else if (seen) {
+        gone = true
+        break
+      }
+    }
+
+    expect(rolls).toBeGreaterThanOrEqual(1)
+    expect(seen).toBe(true)
+    expect(gone).toBe(true)
+    // The whole cycle plus its hold lasts 275 ms at this speed, so it fits in
+    // at most three 100 ms frames.
+    expect(visibleFrames).toBeLessThanOrEqual(3)
+    expect(harness.activeTimers()).toBe(1)
+    await harness.dispose()
+  })
+
+  test("does not roll on a rightward crossing", async () => {
+    const states = createDuckStates()
+    const state = createDuckState({ jokeText: "Quack-quack!" })
+    state.column = 14
+    state.direction = 1
+    state.mode = "swim"
+    states.set(SESSION, state)
+
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+
+    const frame = await harness.tick(2)
+    expect(columnOf(frame)).toBe(15)
+    expect(rolls).toBe(0)
+    expect(hasCow(frame)).toBe(false)
+    await harness.dispose()
+  })
+
+  test("does not start a cow on a miss", async () => {
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      random: () => {
+        rolls += 1
+        return 1
+      },
+    })
+
+    const frame = await harness.tick(CROSSING)
+    expect(rolls).toBe(1)
+    expect(hasCow(frame)).toBe(false)
+    await harness.dispose()
+  })
+
+  test("uses exactly a one-in-fifty chance", async () => {
+    const starts = async (value: number) => {
+      const harness = await mount({
+        running: true,
+        width: LANE,
+        random: () => value,
+      })
+      const frame = await harness.tick(CROSSING + 3)
+      const started = hasCow(frame)
+      await harness.dispose()
+      return started
+    }
+
+    expect(await starts(1 / 50 - 0.0001)).toBe(true)
+    expect(await starts(1 / 50)).toBe(false)
+  })
+
+  test("rolls once per crossing and does not start a second cow", async () => {
+    const narrow = 17
+    const limit = narrow - DUCK_WIDTH
+    const crossing = limit + Math.ceil(limit / 2) + 1
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: narrow,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+
+    await harness.tick(crossing)
+    expect(rolls).toBe(1)
+
+    // The next left crossing happens while the first cow is still coming back.
+    const second = await harness.tick(18)
+    expect(rolls).toBe(2)
+    expect(hasCow(second)).toBe(true)
+    await harness.dispose()
+  })
+
+  test("rest and dock do not roll", async () => {
+    const resting = await mount({ width: LANE, random: () => 0 })
+    const restingFrame = await resting.tick(5)
+    expect(restingFrame).not.toContain("^")
+    await resting.dispose()
+
+    const states = createDuckStates()
+    const state = createDuckState({ jokeText: "Quack-quack!" })
+    state.column = 18
+    state.direction = -1
+    state.mode = "swim"
+    states.set(SESSION, state)
+
+    let rolls = 0
+    const docking = await mount({
+      width: LANE,
+      states,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+    const dockedFrame = await docking.tick(5)
+    expect(rolls).toBe(0)
+    expect(dockedFrame).not.toContain("^")
+    await docking.dispose()
+  })
+
+  test("a pending form does not roll", async () => {
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+    harness.formCreated("form-1")
+    await harness.frame()
+
+    expect(await harness.tick(60)).not.toContain("^")
+    expect(rolls).toBe(0)
+    await harness.dispose()
+  })
+
+  test("zero speed does not roll", async () => {
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      swimSpeed: 0,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+
+    expect(await harness.tick(60)).not.toContain("^")
+    expect(rolls).toBe(0)
+    await harness.dispose()
+  })
+
+  test("freezes the cow with the water while a form waits", async () => {
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      random: () => 0,
+    })
+    await harness.tick(CROSSING + 15)
+    harness.formCreated("form-1")
+    const frozen = await harness.frame()
+    expect(questionMarker(frozen)).toBeDefined()
+    expect(hasCow(frozen)).toBe(true)
+
+    const after = await harness.advance(1000)
+    expect(questionMarker(after)).toBeDefined()
+    expect(cowSnapshot(after)).toEqual(cowSnapshot(frozen))
+    expect(waterRows(after)).toEqual(waterRows(frozen))
+
+    harness.formReplied("form-1")
+    const resumed = await harness.frame()
+    expect(questionMarker(resumed)).toBeUndefined()
+    expect(cowSnapshot(resumed)).toEqual(cowSnapshot(frozen))
+
+    const moving = await harness.advance(700)
+    expect(cowSnapshot(moving)).not.toEqual(cowSnapshot(frozen))
+    await harness.dispose()
+  })
+
+  test("docks to rest and clears the cow", async () => {
+    const states = createDuckStates()
+    const state = createDuckState({ jokeText: "Quack-quack!" })
+    state.column = 15
+    state.direction = -1
+    state.mode = "swim"
+    states.set(SESSION, state)
+
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      random: () => 0,
+    })
+    await harness.tick(2)
+    expect(state.cow).toBeDefined()
+
+    harness.setRunning(false)
+    const docked = await harness.tick(20)
+
+    expect(state.mode as string).toBe("rest")
+    expect(state.cow).toBeUndefined()
+    expect(hasCow(docked)).toBe(false)
+    await harness.dispose()
+  })
+
+  test("zero speed clears an active cow", async () => {
+    const states = createDuckStates()
+    const state = createDuckState({ jokeText: "Quack-quack!" })
+    state.mode = "swim"
+    state.cow = { columns: 5, accumulated: 0 }
+    states.set(SESSION, state)
+
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      swimSpeed: 0,
+      random: () => 0,
+    })
+    const frame = await harness.frame()
+
+    expect(state.cow).toBeUndefined()
+    expect(hasCow(frame)).toBe(false)
+    await harness.dispose()
+  })
+
+  test("keeps the cow phase across a rebuild and a hidden session", async () => {
+    const states = createDuckStates()
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      random: () => 0,
+    })
+    await harness.tick(CROSSING + 15)
+    const before = await harness.frame()
+    expect(hasCow(before)).toBe(true)
+
+    const rebuilt = await rebuild(harness, {
+      running: true,
+      width: LANE,
+      states,
+      random: () => 0,
+    })
+    expect(cowSnapshot(await rebuilt.frame())).toEqual(cowSnapshot(before))
+
+    // Another tab may swim, but the hidden cow belongs to the first session and
+    // must not spend a single column while that tab is away.
+    rebuilt.setSession("ses_other")
+    await rebuilt.tick(5)
+    rebuilt.setSession(SESSION)
+    expect(cowSnapshot(await rebuilt.frame())).toEqual(cowSnapshot(before))
+    await rebuilt.dispose()
+  })
+
+  test("keeps the full-out hold across a rebuild", async () => {
+    const states = createDuckStates()
+    const harness = await mount({
+      running: true,
+      width: LANE,
+      states,
+      random: () => 0,
+    })
+    await harness.tick(CROSSING + 18)
+    const full = await harness.frame()
+    expect(hasCow(full)).toBe(true)
+
+    const rebuilt = await rebuild(harness, {
+      running: true,
+      width: LANE,
+      states,
+      random: () => 0,
+    })
+    expect(cowSnapshot(await rebuilt.frame())).toEqual(cowSnapshot(full))
+
+    // The hold is already spent. The next column interval must start the
+    // return; a lost `held` would keep the cow full for one more interval.
+    const moved = await rebuilt.advance(300)
+    expect(cowSnapshot(moved)).not.toEqual(cowSnapshot(full))
+    await rebuilt.dispose()
+  })
+
+  test("a lane without room to swim does not roll", async () => {
+    let rolls = 0
+    const harness = await mount({
+      running: true,
+      width: DUCK_WIDTH - 2,
+      random: () => {
+        rolls += 1
+        return 0
+      },
+    })
+
+    expect(await harness.tick(5)).not.toContain("^")
+    expect(rolls).toBe(0)
+    await harness.dispose()
   })
 })
 

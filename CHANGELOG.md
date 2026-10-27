@@ -4,6 +4,7 @@
 
 ### Added
 
+- An Easter egg.
 - `/duck` talks to the duck in the sidebar: it answers with a joke, and `/duck <text>` continues a short dialogue. The duck
   keeps the last five exchanges of the session, starts the dialogue over with each new turn, and never adds it to the
   session's context or transcript.
