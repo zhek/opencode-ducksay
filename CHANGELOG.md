@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.4.0] — 2026-10-28
 
 ### Added
 
@@ -114,6 +114,7 @@ First release. CLI/TUI-only plugin: no server entrypoint.
 
 - A `Ducksay` section with a static ASCII duck in the session sidebar, below the built-in sections.
 
+[1.4.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.4.0
 [1.3.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.3.0
 [1.2.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.2.0
 [1.1.0]: https://github.com/zhek/opencode-ducksay/releases/tag/v1.1.0
