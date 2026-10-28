@@ -18,6 +18,10 @@ ___( o)< ╯
      ~~~~     ~~~~     ~~~~     ~~~~
 ```
 
+## Talk to the duck
+
+Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters the session's context or transcript.
+
 ## Install
 
 Add the package to `~/.config/opencode/cli.json` to enable it everywhere:
@@ -31,10 +35,6 @@ Add the package to `~/.config/opencode/cli.json` to enable it everywhere:
 To enable it in one project only, add the same entry to that project's `opencode.json` instead.
 
 Restart OpenCode. There is no build step.
-
-## Talk to the duck
-
-Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters the session's context or transcript.
 
 ## Documentation
 
