@@ -1,6 +1,6 @@
 {
   "name": "opencode-ducksay",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "An ASCII duck that tells jokes in the OpenCode TUI session sidebar",
   "license": "MIT",
   "author": "Evgeniy Arapov (https://github.com/zhek)",
