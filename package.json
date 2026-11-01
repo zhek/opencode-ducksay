@@ -40,7 +40,8 @@
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo:gif": "bun scripts/make-demo-gif.ts"
   },
   "dependencies": {
     "@opencode/plugin": "^2.0.28"
@@ -51,10 +52,12 @@
     "solid-js": "1.9.12"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.1.0",
     "@opentui/core": "^0.6.4",
     "@opentui/solid": "^0.6.4",
+    "@types/bun": "^1.4.3",
+    "gifenc": "^1.0.3",
     "solid-js": "1.9.12",
-    "typescript": "^5.9.3",
-    "@types/bun": "^1.4.3"
+    "typescript": "^5.9.3"
   }
 }
