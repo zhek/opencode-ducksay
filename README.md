@@ -1,12 +1,12 @@
 # OpenCode Ducksay
 
 [![npm version](https://img.shields.io/npm/v/opencode-ducksay)](https://www.npmjs.com/package/opencode-ducksay)
-[![License: MIT](https://img.shields.io/npm/l/opencode-ducksay)](LICENSE)
+[![License: MIT](https://img.shields.io/npm/l/opencode-ducksay)](https://github.com/zhek/opencode-ducksay/blob/main/LICENSE)
 [![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-5b8def)](https://opencode.ai/v2/docs/)
 
 A tiny ASCII duck paddles around your OpenCode sidebar and drops funny remarks about your work. It uses your session's model.
 
-[Русская версия](README.ru.md)
+[Русская версия](https://github.com/zhek/opencode-ducksay/blob/main/README.ru.md)
 
 ![Ducksay demo: the duck comments on a turn and answers /duck](https://raw.githubusercontent.com/zhek/opencode-ducksay/main/assets/ducksay-demo.gif)
 
@@ -36,4 +36,4 @@ instead.
 
 ## License
 
-[MIT](LICENSE) © Evgeniy Arapov
+[MIT](https://github.com/zhek/opencode-ducksay/blob/main/LICENSE) © Evgeniy Arapov

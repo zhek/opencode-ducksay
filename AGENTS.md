@@ -14,6 +14,9 @@
   user-facing document with a Russian counterpart: `README.ru.md` next to `README.md` and `docs/configuration.ru.md` next
   to `docs/configuration.md`. Both versions must change in the same task, and every document added to `docs/` gets a
   `*.ru.md` counterpart linked from the Russian README. Code, identifiers, and file names are always English.
+- **README links are absolute.** `README.md` and `README.ru.md` are published on npm and rendered outside this tree, so
+  every Markdown link and image in them MUST be a full `https://…` URL — including the language switcher and the license.
+  A relative `docs/…` or `LICENSE` link is broken there. `docs/*.md` are not published and may keep relative links.
 - **Changelog first, versions later.** An ordinary PR never touches the version. A user-visible change is added to
   `CHANGELOG.md` under `## Unreleased` at the top of the file, under the same subheadings a released entry uses:
   `### Added`, `### Changed`, `### Fixed`, `### Removed`. Such a PR creates no `## [X.Y.Z]` heading, adds no release link,

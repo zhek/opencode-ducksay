@@ -1,12 +1,12 @@
 # OpenCode Ducksay
 
 [![Версия npm](https://img.shields.io/npm/v/opencode-ducksay)](https://www.npmjs.com/package/opencode-ducksay)
-[![Лицензия MIT](https://img.shields.io/npm/l/opencode-ducksay)](LICENSE)
+[![Лицензия MIT](https://img.shields.io/npm/l/opencode-ducksay)](https://github.com/zhek/opencode-ducksay/blob/main/LICENSE)
 [![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-5b8def)](https://opencode.ai/v2/docs/)
 
 Маленькая ASCII-уточка плавает в сайдбаре OpenCode и отпускает забавные комментарии по вашей работе. Уточка использует модель вашей сессии.
 
-[English version](README.md)
+[English version](https://github.com/zhek/opencode-ducksay/blob/main/README.md)
 
 ![Демонстрация Ducksay: уточка комментирует ответ и отвечает на /duck](https://raw.githubusercontent.com/zhek/opencode-ducksay/main/assets/ducksay-demo.ru.gif)
 
@@ -36,4 +36,4 @@ opencode plugin add opencode-ducksay
 
 ## Лицензия
 
-[MIT](LICENSE) © Evgeniy Arapov
+[MIT](https://github.com/zhek/opencode-ducksay/blob/main/LICENSE) © Evgeniy Arapov

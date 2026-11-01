@@ -31,14 +31,28 @@ function relativeLinks(file: string): string[] {
  */
 const REPO = "https://github.com/zhek/opencode-ducksay/blob/main/"
 
+const READMES = ["README.md", "README.ru.md"]
+
+function destinations(file: string): string[] {
+  return [...text(file).matchAll(/\]\(([^)\s]+)\)/g)].map(match => match[1]!)
+}
+
 function docLinks(file: string): string[] {
-  return [...text(file).matchAll(/\]\(([^)\s]+)\)/g)]
-    .map(match => match[1]!)
+  return destinations(file)
     .map(href => (href.startsWith(REPO) ? href.slice(REPO.length) : href))
     .filter(href => href.startsWith("docs/"))
 }
 
 describe("documentation links", () => {
+  test.each(READMES)("%s uses only absolute links", file => {
+    const links = destinations(file)
+    expect(links.length).toBeGreaterThan(0)
+
+    for (const href of links) {
+      expect(href, `${file} → ${href} is relative`).toMatch(/^[a-z][a-z0-9+.-]*:/i)
+    }
+  })
+
   test.each(DOCUMENTS)("%s links only to files that exist", file => {
     for (const href of relativeLinks(file)) {
       expect(existsSync(join(ROOT, dirname(file), href)), `${file} → ${href}`).toBe(true)
