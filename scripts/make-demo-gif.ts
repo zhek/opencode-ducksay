@@ -75,8 +75,12 @@ for (const [regular, bold, candidate] of FONT_CANDIDATES) {
 }
 const FONT = `"${family}", monospace`
 
+/**
+ * The GIF sits on a white Markdown page, so only the canvas around the window
+ * is white. The OpenCode window itself stays in its dark theme.
+ */
 const C = {
-  bg: "#05070b",
+  bg: "#ffffff",
   window: "#0d1117",
   bar: "#161b22",
   border: "#30363d",
@@ -146,11 +150,7 @@ function measure(str: string, size: number): number {
 
 function drawBackground(demo: DemoScenario) {
   const g = sctx
-  const bg = g.createRadialGradient(W * 0.48, H * 0.22, 30, W * 0.5, H * 0.55, W * 0.75)
-  bg.addColorStop(0, "#111827")
-  bg.addColorStop(0.55, "#0a0f18")
-  bg.addColorStop(1, C.bg)
-  g.fillStyle = bg
+  g.fillStyle = C.bg
   g.fillRect(0, 0, W, H)
 
   g.save()

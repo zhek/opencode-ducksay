@@ -1,22 +1,14 @@
 # OpenCode Ducksay
 
-A small ASCII duck lives in your OpenCode sidebar. It swims while the session works, then settles at the edge and tells
-a short joke about your session, written by the same model that just answered you.
+[![npm version](https://img.shields.io/npm/v/opencode-ducksay)](https://www.npmjs.com/package/opencode-ducksay)
+[![License: MIT](https://img.shields.io/npm/l/opencode-ducksay)](LICENSE)
+[![OpenCode V2](https://img.shields.io/badge/OpenCode-V2-5b8def)](https://opencode.ai/v2/docs/)
+
+A tiny ASCII duck paddles around your OpenCode sidebar and drops funny remarks about your work. It uses your session's model.
 
 [Русская версия](README.ru.md)
 
-```text
-Ducksay
-
-
-
-        ╭───────────────────────────╮
-        │ Quack-quack!              │
-    __  ╰───────────────────────────╯
-___( o)< ╯
-\ <_. )  ~~~~     ~~~~     ~~~~     ~
-     ~~~~     ~~~~     ~~~~     ~~~~
-```
+![Ducksay demo: the duck comments on a turn and answers /duck](https://raw.githubusercontent.com/zhek/opencode-ducksay/main/assets/ducksay-demo.gif)
 
 ## Talk to the duck
 
@@ -24,17 +16,16 @@ Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters th
 
 ## Install
 
-Add the package to `~/.config/opencode/cli.json` to enable it everywhere:
+Install the plugin with one command:
 
-```json
-{
-  "plugins": ["opencode-ducksay"]
-}
+```bash
+opencode plugin add opencode-ducksay
 ```
 
-To enable it in one project only, add the same entry to that project's `opencode.json` instead.
+Restart OpenCode.
 
-Restart OpenCode. There is no build step.
+To enable it in one project only, add `"opencode-ducksay"` to the `plugins` array in that project's `opencode.json`
+instead.
 
 ## Documentation
 
