@@ -40,12 +40,12 @@ import {
 const CASES = [
   {
     locale: "en" as const,
-    first: ["Hello! I'd wave back, but", "these wings are busy", "swimming."],
+    first: ["Hello! I'd wave back, but", "these wings are busy", "holding the context."],
     second: ["The tokens are always", "juicier across the road."],
   },
   {
     locale: "ru" as const,
-    first: ["Привет! Помахал бы, но", "эти крылья заняты", "плаванием."],
+    first: ["Привет! Помахала бы, но", "крылья заняты — держу", "контекст."],
     second: ["Через дорогу всегда более", "сочные токены."],
   },
 ]
