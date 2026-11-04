@@ -42,12 +42,17 @@
   stopped working. Implementation detail — function and module names, how an algorithm works, how the art is mirrored, which
   host events are watched — belongs in `design.md`, not in a document a user reads. The test: if a line cannot be checked
   without opening the source, it is not a description for the user.
+- **Specs pin every user-visible value.** A change that introduces or alters a configuration option, a command and its
+  description, user-visible text (title, hint, toast, error message), a default value or a constant must state it verbatim
+  in the spec: the exact option or command name, its description and default value (say so when there is none), the text
+  itself rather than a summary, and the constant's exact value and unit. "A configurable timeout" or "an error message" is
+  not enough — a reader must be able to check the value without opening the source.
 
 ### Where these rules live
 
-The authoritative copies are in `openspec/config.yaml` — `rules.tasks` for authoring `tasks.md`, `operations.apply.guidance`
-for implementation, `operations.archive.guidance` for archiving. Edit there first, then mirror here; the two must not
-drift.
+The authoritative copies are in `openspec/config.yaml` — `rules.specs` for authoring a spec delta, `rules.tasks` for
+authoring `tasks.md`, `operations.apply.guidance` for implementation, `operations.archive.guidance` for archiving. Edit
+there first, then mirror here; the two must not drift.
 
 ## Commands
 
@@ -171,10 +176,10 @@ The project is spec-driven; planning and implementation are separate phases.
   scenarios. The validator matches a literal `SHALL`/`MUST` with `/\b(SHALL|MUST)\b/`, so Russian equivalents («должна»,
   «должен») do not count. Without it `openspec validate --strict <name>` exits non-zero and blocks the archive.
 - `openspec/config.yaml` `context` holds the **documentation language rule** (OpenSpec artifacts in Russian, project docs in
-  English with Russian counterparts) and reaches both artifact generation and apply. `rules.tasks` holds what applies
-  while **authoring** `tasks.md`; `operations.apply.guidance` is the only channel that reaches the **apply** phase — put
-  implementation-time rules there, or they will not be seen while the code is being written. `AGENTS.md` mirrors all
-  three; edit the config first.
+  English with Russian counterparts) and reaches both artifact generation and apply. `rules.specs` holds what applies while
+  **authoring the spec delta**, `rules.tasks` what applies while **authoring** `tasks.md`; `operations.apply.guidance` is the
+  only channel that reaches the **apply** phase — put implementation-time rules there, or they will not be seen while the
+  code is being written. `AGENTS.md` mirrors all of them; edit the config first.
 
 ## Docs
 
