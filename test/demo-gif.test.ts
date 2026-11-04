@@ -16,6 +16,7 @@ import {
   COMMAND_SELECT_START,
   COMMAND_SEND_START,
   COMMAND_TYPE_START,
+  COPY_ICON,
   FIRST_HOLD_START,
   FIRST_TYPE_START,
   LANE_COLS,
@@ -30,6 +31,7 @@ import {
   TOTAL,
   TURN_END,
   TURN_WAIT_FRAMES,
+  copyIcon,
   frameState,
   hasTilde,
   sidebarRows,
@@ -168,6 +170,34 @@ describe("demo parity with the plugin", () => {
             open: beakOpen(count, words.length),
           })
         }
+      }
+    }
+  })
+})
+
+describe("demo copy icon", () => {
+  test("shows the plugin's own label", () => {
+    expect(COPY_ICON).toBe("[copy]")
+  })
+
+  test("lights only while a finished joke can be copied", () => {
+    for (const locale of LOCALES) {
+      for (const frame of [0, REST_START, SECOND_WAIT_START]) {
+        expect(copyIcon(frameState(frame, locale)), `frame ${frame}`).toBe("muted")
+      }
+      // A joke is copyable from the moment the answer arrives, even while the
+      // bubble is still typing it out word by word, and it stays copyable while
+      // the user types the `/duck` command over it.
+      for (const frame of [
+        FIRST_TYPE_START,
+        FIRST_HOLD_START,
+        COMMAND_MENU_START,
+        TURN_END,
+        COMMAND_SEND_START,
+        SECOND_HOLD_START,
+        TOTAL - 1,
+      ]) {
+        expect(copyIcon(frameState(frame, locale)), `frame ${frame}`).toBe("active")
       }
     }
   })
