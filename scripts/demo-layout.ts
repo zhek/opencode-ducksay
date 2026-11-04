@@ -140,6 +140,26 @@ export interface FrameState {
   era: "working" | "rest"
   input: string
   commandMenu: boolean
+  /**
+   * The plugin's speech state: `idle` before a turn ends, `waiting` while the
+   * dots are on screen and `ready` once there is a joke to copy. The copy icon
+   * follows it the same way the real section does.
+   */
+  speech: "idle" | "waiting" | "ready"
+}
+
+/** The copy glyph the section shows at the right end of its heading. */
+export const COPY_ICON = "[copy]"
+
+/**
+ * Whether the heading's copy icon is lit for this frame.
+ *
+ * The plugin lights it when the bubble is visible and the joke is ready; the
+ * waiting dots and the swim are dimmed. The demo never clicks it, so there is
+ * no `✓` confirmation to show.
+ */
+export function copyIcon(state: FrameState): "active" | "muted" {
+  return state.bubble !== null && state.speech === "ready" ? "active" : "muted"
 }
 
 /**
@@ -250,6 +270,7 @@ export function frameState(i: number, locale: Locale = "en"): FrameState {
       era: "working",
       input: "",
       commandMenu: false,
+      speech: "idle",
     }
   }
 
@@ -264,6 +285,7 @@ export function frameState(i: number, locale: Locale = "en"): FrameState {
       era: "rest",
       input: "",
       commandMenu: false,
+      speech: i < FIRST_TYPE_START ? "waiting" : "ready",
     }
   }
 
@@ -277,6 +299,7 @@ export function frameState(i: number, locale: Locale = "en"): FrameState {
       bubble: { text: demo.firstJoke, open: true },
       era: "rest",
       ...commandState(i, demo),
+      speech: "ready",
     }
   }
 
@@ -288,5 +311,6 @@ export function frameState(i: number, locale: Locale = "en"): FrameState {
     era: "rest",
     input: "",
     commandMenu: false,
+    speech: i < SECOND_TYPE_START ? "waiting" : "ready",
   }
 }

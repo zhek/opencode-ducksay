@@ -29,11 +29,13 @@ import { GIFEncoder, quantize, applyPalette } from "gifenc"
 import {
   COMMAND_MENU_START,
   COMMAND_SEND_START,
+  COPY_ICON,
   LANE_COLS,
   LOCALES,
   SCENARIOS,
   SECOND_HOLD_START,
   TOTAL,
+  copyIcon,
   frameState,
   sidebarRows,
   type DemoScenario,
@@ -272,6 +274,19 @@ function drawSectionLabel(label: string, y: number, primary = false) {
   text(sctx, label, LANE_X, y, primary ? C.text : C.muted, { size: 11, weight: 600 })
 }
 
+/**
+ * The copy icon at the right end of the `Ducksay` heading.
+ *
+ * The real section puts a six-cell icon box at the lane's right edge; this
+ * right-aligns the glyph to the same edge. The icon is `theme.text.base` while
+ * a finished joke can be copied and `theme.text.muted` while the duck is still
+ * swimming or waiting, matching the plugin's `canCopy()`.
+ */
+function drawHeadingCopy(state: FrameState) {
+  const color = copyIcon(state) === "active" ? C.text : C.muted
+  text(sctx, COPY_ICON, LANE_X + LANE_W - measure(COPY_ICON, 11), ROW_HEAD, color, { size: 11 })
+}
+
 function drawSidebar(state: FrameState, demo: DemoScenario) {
   const g = sctx
   drawSectionLabel("Session", 74)
@@ -279,6 +294,7 @@ function drawSidebar(state: FrameState, demo: DemoScenario) {
   drawSectionLabel("MCP", 118)
   text(g, "no servers", LANE_X, 136, C.dim, { size: 10 })
   drawSectionLabel("Ducksay", ROW_HEAD, true)
+  drawHeadingCopy(state)
 
   // The section takes one colour: the plugin paints every content row with the
   // theme's text colour, so there is no yellow duck, blue water or orange beak.
