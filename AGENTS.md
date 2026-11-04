@@ -144,6 +144,9 @@ Rules:
 - **Specs and archives are `docs:` commits.** Creating or changing a change's spec delta and archiving the change each
   go in a `docs:` commit — `docs: add <name> spec`, `docs: update <name> spec`, `docs: archive <name>` — separate from
   implementation commits.
+- **Rule changes are `docs:` commits.** Editing the project rules — `AGENTS.md` and `openspec/config.yaml` (`context`,
+  `rules.*`, `operations.*`) — goes in a `docs:` commit, for example `docs: require specs to pin user-visible values`,
+  separate from implementation commits.
 - **`docs:` changes `README.md` and `README.ru.md` together**, and `docs/configuration.md` with
   `docs/configuration.ru.md`, in one commit, so the versions cannot drift apart in history.
 - **Squash-merge** the PR into `main`; the PR title becomes the commit message.
