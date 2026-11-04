@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
 import type { Data } from "@opencode/plugin/tui/context"
+import { TextAttributes } from "@opentui/core"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
 import {
   createComponent,
@@ -113,6 +114,27 @@ const BUSY_TOAST = ">(o ) The duck is mid-quack. Try later."
 /** Shown when `silent` is on; the duck has nothing to say by configuration. */
 const SILENT_TOAST = "<(o ) The duck keeps mum."
 
+/** The copy glyph shown at the right of the heading. */
+const COPY_ICON = "[copy]"
+
+/** The confirmation shown in the icon after a successful copy. */
+const COPY_DONE = "✓"
+
+/** How long the confirmation stays before the icon returns to `COPY_ICON`. */
+const COPY_FEEDBACK_MS = 1200
+
+/** The wrapper put around a copied joke; the bubble itself stays plain. */
+const COPY_PREFIX = "( o)< "
+const COPY_SUFFIX = " (opencode-ducksay)"
+
+/** What a copy attempt did, so both the icon and the command can report it. */
+export type DuckCopyResult = "copied" | "empty" | "failed"
+
+/** Copy feedback shared by the icon and the `/duck.copy` command. */
+const COPIED_TOAST = ">(o ) Copied to clipboard"
+const EMPTY_COPY_TOAST = "<(o ) The duck hasn't said anything yet."
+const FAILED_COPY_TOAST = ">(o ) The terminal won't take the joke: clipboard is unavailable."
+
 /** What a `/duck` call did, so `setup` knows which toast to show. */
 export type DuckCommandResult = "started" | "muted" | "busy"
 
@@ -121,6 +143,7 @@ export interface DuckHandle {
   /** The session currently displayed by this mount. */
   readonly sessionID: string | undefined
   duck(text: string | undefined): DuckCommandResult
+  copy(): DuckCopyResult
 }
 
 /**
@@ -183,6 +206,15 @@ export function Ducksay(props: {
    * `bubbleText`, which is what the geometry tests use.
    */
   joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
+  /**
+   * Writes text to the terminal clipboard. Without it the heading has no copy
+   * icon, which keeps existing frame tests and the demo render unchanged.
+   */
+  copy?: (text: string) => boolean
+  /** Reports a copy attempt made from the icon; the command reports its own. */
+  notify?: (result: "copied" | "failed") => void
+  /** Colour of a dimmed, unavailable icon. */
+  muted?: RGBA
   /** Registers the live handle the `/duck` command drives; `undefined` clears it. */
   expose?: (handle: DuckHandle | undefined) => void
   /**
@@ -232,12 +264,46 @@ export function Ducksay(props: {
   const [askedForms, setAskedForms] = createSignal<ReadonlySet<string>>(new Set())
   // The marker frame starts at `?` and advances while at least one form waits.
   const [questionFrame, setQuestionFrame] = createSignal(0)
+  // The icon's two pieces of view state: whether it shows the confirmation,
+  // and whether the pointer is over it. Both are written imperatively below.
+  const [copied, setCopied] = createSignal(false)
+  const [hovered, setHovered] = createSignal(false)
+  // Refs are assigned after the first effect pass under Bun's JSX transform, so
+  // this signal makes the icon effect run again once both nodes exist.
+  const [iconReady, setIconReady] = createSignal(false)
+  let stopCopyFeedback: (() => void) | undefined
+  let iconBox: BoxRenderable | undefined
+  let iconText: TextRenderable | undefined
   /**
    * True while the displayed session has a pending form. It is a memo so the
    * marker timer and the rest timers only restart when the state flips, not
    * every time a second form is added or removed.
    */
   const frozen = createMemo(() => askedForms().size > 0)
+
+  const clearCopyFeedback = () => {
+    stopCopyFeedback?.()
+    stopCopyFeedback = undefined
+    setCopied(false)
+  }
+
+  /**
+   * Starts the 1200 ms confirmation. The timer clears itself on its first tick,
+   * so the icon does not depend on a second repaint to return to `[copy]`.
+   */
+  const startCopyFeedback = () => {
+    clearCopyFeedback()
+    setCopied(true)
+    let stop: (() => void) | undefined
+    stop = (props.schedule ?? defaultSchedule)(() => {
+      stop?.()
+      stop = undefined
+      stopCopyFeedback = undefined
+      setCopied(false)
+      props.renderer?.requestRender()
+    }, COPY_FEEDBACK_MS)
+    stopCopyFeedback = stop
+  }
 
   // The lane is measured after the rows are built. Reading its width through a
   // signal means the first real measurement releases a bubble that was waiting
@@ -281,6 +347,7 @@ export function Ducksay(props: {
     if (nextSessionID === activeSessionID) return
     const previousSessionID = activeSessionID
     activeSessionID = nextSessionID
+    clearCopyFeedback()
 
     if (previousSessionID !== undefined && props.states !== undefined) {
       writeSnapshot()
@@ -354,6 +421,33 @@ export function Ducksay(props: {
     if (props.joke === undefined) return jokeText()
     return revealText(jokeText(), shown())
   }
+  /**
+   * A copy needs a clipboard, a visible bubble and a finished joke. The bubble
+   * already rules out `silent`, a narrow lane and an open question.
+   */
+  const canCopy = () =>
+    props.copy !== undefined && bubbleVisible() && speech() === "ready" && jokeText().trim() !== ""
+  /**
+   * Copies the raw joke, not the truncated bubble. The wrapper is app-level
+   * output only: it never reaches `jokeText()` or the bubble, so copying twice
+   * cannot nest it. Returns the outcome and leaves all toasts to the caller.
+   */
+  const copyJoke = (): DuckCopyResult => {
+    if (!canCopy()) return "empty"
+    try {
+      const accepted = props.copy?.(COPY_PREFIX + jokeText().trim() + COPY_SUFFIX)
+      if (accepted !== true) {
+        clearCopyFeedback()
+        return "failed"
+      }
+    } catch {
+      clearCopyFeedback()
+      return "failed"
+    }
+    startCopyFeedback()
+    return "copied"
+  }
+
   const art = () => {
     const set = sprites()
     if (state.direction === 1) return beakOpen() ? set.rightOpen : set.right
@@ -377,6 +471,28 @@ export function Ducksay(props: {
    * shrinks to the art and there is no room to swim at all.
    */
   const limit = () => laneLimit(laneWidth(), artWidth())
+
+  // The icon is static JSX; Solid signals write its content, colour and
+  // visibility. Hiding it with `visible` keeps the heading row one line high.
+  createEffect(() => {
+    const ready = iconReady()
+    const available = canCopy()
+    const done = copied()
+    const over = hovered()
+    const shown = props.copy !== undefined && speechAllowed()
+    if (ready && iconText !== undefined) {
+      iconText.content = shown ? (done ? COPY_DONE : COPY_ICON) : ""
+      iconText.fg = available ? props.primary : (props.muted ?? props.primary)
+      iconText.attributes = available && over ? TextAttributes.BOLD : TextAttributes.NONE
+    }
+    if (iconBox !== undefined) iconBox.visible = shown
+    props.renderer?.requestRender()
+  })
+
+  // Losing the joke, the bubble or the clipboard must not leave a stale `✓`.
+  createEffect(() => {
+    if (!canCopy()) clearCopyFeedback()
+  })
 
   /**
    * Parks the duck: inside the lane, nose towards the middle of it. Every route
@@ -766,8 +882,12 @@ export function Ducksay(props: {
       return props.sessionID
     },
     duck,
+    copy: copyJoke,
   })
-  onCleanup(() => props.expose?.(undefined))
+  onCleanup(() => {
+    props.expose?.(undefined)
+    clearCopyFeedback()
+  })
 
   // A request belongs to the end of a turn, not to the rest pose: it starts
   // while the duck docks, so the bubble is usually ready by the time it stops.
@@ -1002,9 +1122,43 @@ export function Ducksay(props: {
         props.renderer?.requestRender()
       }}
     >
-      <text fg={props.primary}>
-        <b>Ducksay</b>
-      </text>
+      <box flexDirection="row" width="100%" height={1} alignItems="center">
+        <text fg={props.primary}>
+          <b>Ducksay</b>
+        </text>
+        <box flexGrow={1} height={1} />
+        <box
+          width={6}
+          height={1}
+          flexShrink={0}
+          justifyContent="center"
+          alignItems="center"
+          visible={props.copy !== undefined && props.silent !== true}
+          onMouseUp={(event) => {
+            if (event.button !== 0) return
+            const result = copyJoke()
+            if (result !== "empty") props.notify?.(result)
+          }}
+          onMouseOver={() => setHovered(true)}
+          onMouseOut={() => setHovered(false)}
+          ref={(box) => {
+            iconBox = box
+            box.visible = props.copy !== undefined && props.silent !== true && limit() > 0
+          }}
+        >
+          <text
+            wrapMode="none"
+            fg={props.muted ?? props.primary}
+            ref={(text) => {
+              iconText = text
+              text.content = props.copy !== undefined && props.silent !== true && limit() > 0 ? COPY_ICON : ""
+              setIconReady(true)
+            }}
+          >
+            {COPY_ICON}
+          </text>
+        </box>
+      </box>
       {Array.from({ length: lineCount }, (_, index) => (
         // The ref paints its own line: `onMount` runs before refs are assigned,
         // so a single paint there would leave every line empty.
@@ -1068,15 +1222,34 @@ export default Plugin.define({
       const route = context.ui.router.current()
       return route?.type === "session" ? route.sessionID : undefined
     }
-    const notify = (message: string) =>
-      context.ui.toast.show({ message, variant: "info", duration: 2000 })
+    const showToast = (message: string, variant: "info" | "success" | "error") =>
+      context.ui.toast.show({ message, variant, duration: 2000 })
+    const reportCopy = (result: DuckCopyResult) => {
+      if (result === "copied") showToast(COPIED_TOAST, "success")
+      else if (result === "failed") showToast(FAILED_COPY_TOAST, "error")
+      else showToast(EMPTY_COPY_TOAST, "info")
+    }
     const duckCommand = (input: string | undefined) => {
       const sessionID = currentSession()
       const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
         ? handle.duck(input)
         : "busy"
-      if (result === "muted") notify(SILENT_TOAST)
-      else if (result === "busy") notify(BUSY_TOAST)
+      if (result === "muted") showToast(SILENT_TOAST, "info")
+      else if (result === "busy") showToast(BUSY_TOAST, "info")
+    }
+    const copyCommand = () => {
+      const sessionID = currentSession()
+      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+        ? handle.copy()
+        : "empty"
+      reportCopy(result)
+    }
+    const copyToClipboard = (text: string) => {
+      try {
+        return context.renderer.copyToClipboardOSC52(text)
+      } catch {
+        return false
+      }
     }
 
     // `slot` already returns its own teardown: it unregisters the claim.
@@ -1097,6 +1270,9 @@ export default Plugin.define({
           return input.sessionID
         },
         states,
+        copy: copyToClipboard,
+        notify: reportCopy,
+        muted: context.theme.text.muted,
         expose: (next) => {
           handle = next
         },
@@ -1125,10 +1301,17 @@ export default Plugin.define({
         mode: "global",
         commands: [
           {
-            id: "ducksay.duck",
+            id: "duck.talk",
             title: "Talk to the duck",
             slash: { name: "duck", arguments: true },
             run: duckCommand,
+          },
+          {
+            id: "duck.copy",
+            title: "Copy the duck's latest joke",
+            bind: false,
+            slash: { name: "duck.copy" },
+            run: copyCommand,
           },
         ],
       }))

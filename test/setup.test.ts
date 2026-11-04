@@ -261,6 +261,8 @@ function useClockAsGlobalTimers(clock: ManualClock): () => void {
 
 interface Mounted {
   readonly harness: Fake
+  /** Text handed to the renderer's OSC 52 clipboard, in order. */
+  readonly copies: readonly string[]
   /** Paints one frame and returns it. */
   readonly frame: () => Promise<string>
   /** Paints `frames` frames of `ms` each and returns the last one. */
@@ -281,10 +283,19 @@ async function mountClaim(
     branch?: string
     client?: JokeClient
     width?: number
+    /** The renderer clipboard's answer; defaults to accepting every copy. */
+    copyResult?: boolean | ((text: string) => boolean)
   } = {},
 ): Promise<Mounted> {
   const clock = new ManualClock()
   const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
+  const copies: string[] = []
+  const copyResult = options.copyResult ?? true
+  ;(setup.renderer as unknown as { copyToClipboardOSC52: (text: string) => boolean })
+    .copyToClipboardOSC52 = (text: string) => {
+      copies.push(text)
+      return typeof copyResult === "function" ? copyResult(text) : copyResult
+    }
   const restoreTimers = useClockAsGlobalTimers(clock)
   const harness = fake({
     renderer: setup.renderer,
@@ -330,6 +341,7 @@ async function mountClaim(
 
   return {
     harness,
+    copies,
     frame,
     swim: async (frames, ms = 100) => {
       let captured = ""
@@ -444,6 +456,8 @@ describe("the /duck command", () => {
 
   const duckCommand = (harness: Fake): RegisteredCommand =>
     harness.commands.find((entry) => entry.slash?.name === "duck")!
+  const copyCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.id === "duck.copy")!
 
   test("registers a slash-only command from the app slot, not from setup", async () => {
     const harness = fake()
@@ -455,10 +469,16 @@ describe("the /duck command", () => {
 
     try {
       const command = duckCommand(harness)
-      expect(command.id).toBe("ducksay.duck")
+      expect(command.id).toBe("duck.talk")
       expect(command.slash).toEqual({ name: "duck", arguments: true })
       expect(command.bind).toBeUndefined()
       expect(command.palette).toBeUndefined()
+
+      const copy = copyCommand(harness)
+      expect(copy.title).toBe("Copy the duck's latest joke")
+      expect(copy.bind).toBe(false)
+      expect(copy.palette).toBeUndefined()
+      expect(copy.slash).toEqual({ name: "duck.copy" })
     } finally {
       await unmount()
       await cleanup()
@@ -631,9 +651,177 @@ describe("the /duck command", () => {
   })
 })
 
+describe("the duck.copy command", () => {
+  const COPIED_TOAST = {
+    message: ">(o ) Copied to clipboard",
+    variant: "success",
+    duration: 2000,
+  }
+  const EMPTY_TOAST = {
+    message: "<(o ) The duck hasn't said anything yet.",
+    variant: "info",
+    duration: 2000,
+  }
+  const FAILED_TOAST = {
+    message: ">(o ) The terminal won't take the joke: clipboard is unavailable.",
+    variant: "error",
+    duration: 2000,
+  }
+
+  const copyCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.id === "duck.copy")!
+
+  /** Ends a turn, waits for the fallback joke and the dock, returns the bubble. */
+  async function rest(mounted: Mounted): Promise<string> {
+    mounted.harness.emit("session.execution.succeeded", forSession)
+    await settle()
+    let last = ""
+    for (let step = 0; step < 120; step += 1) {
+      last = await mounted.swim(1, 200)
+      if (last.includes("Quack-quack!")) return last
+    }
+    throw new Error(`the copy command test never reached a rest bubble:\n${last}`)
+  }
+
+  test("copies the displayed joke and reports success", async () => {
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), copyResult: true })
+
+    try {
+      await rest(mounted)
+      copyCommand(mounted.harness).run()
+      await settle()
+      const after = await mounted.frame()
+
+      expect(mounted.copies).toEqual(["( o)< Quack-quack! (opencode-ducksay)"])
+      expect(mounted.harness.toasts).toEqual([COPIED_TOAST])
+      expect(after).toContain("✓")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("shows the clipboard error and leaves the icon alone", async () => {
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), copyResult: false })
+
+    try {
+      await rest(mounted)
+      copyCommand(mounted.harness).run()
+      await settle()
+      const after = await mounted.frame()
+
+      expect(mounted.copies).toHaveLength(1)
+      expect(mounted.harness.toasts).toEqual([FAILED_TOAST])
+      expect(after).not.toContain("✓")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("reports an empty command when no section is mounted", async () => {
+    const harness = fake()
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      copyCommand(harness).run()
+
+      expect(harness.toasts).toEqual([EMPTY_TOAST])
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("reports an empty command before the duck has joked", async () => {
+    const mounted = await mountClaim({ session: sessionInfo(), copyResult: true })
+
+    try {
+      await settle()
+      copyCommand(mounted.harness).run()
+
+      expect(mounted.copies).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("does not copy another session's joke", async () => {
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), copyResult: true })
+
+    try {
+      await rest(mounted)
+      mounted.setSession(OTHER_SESSION)
+      mounted.harness.setRoute({ type: "session", sessionID: OTHER_SESSION })
+      copyCommand(mounted.harness).run()
+
+      expect(mounted.copies).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("reports an empty command under silent and in a narrow lane", async () => {
+    for (const options of [{ options: { silent: true } }, { width: 5 }]) {
+      const mounted = await mountClaim({ session: sessionInfo(), copyResult: true, ...options })
+
+      try {
+        await settle()
+        copyCommand(mounted.harness).run()
+
+        expect(mounted.copies).toHaveLength(0)
+        expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
+      } finally {
+        await mounted.close()
+      }
+    }
+  })
+
+  test("reports an empty command while the joke is still loading", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      client: deferred.client,
+      copyResult: true,
+    })
+
+    try {
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await settle()
+      copyCommand(mounted.harness).run()
+
+      expect(mounted.copies).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("reports an empty command while a question waits", async () => {
+    const mounted = await mountClaim({ running: true, session: sessionInfo(), copyResult: true })
+
+    try {
+      mounted.harness.emit("form.created", {
+        data: { form: { id: "question-1", sessionID: SESSION, title: "Question", fields: [] } },
+      })
+      await settle()
+      copyCommand(mounted.harness).run()
+
+      expect(mounted.copies).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
+    } finally {
+      await mounted.close()
+    }
+  })
+})
+
 describe("dialogue lifecycle through the plugin", () => {
   const duckCommand = (harness: Fake): RegisteredCommand =>
     harness.commands.find((entry) => entry.slash?.name === "duck")!
+  const copyCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.id === "duck.copy")!
 
   test("clears the dialogue when the shown session starts a new turn", async () => {
     const deferred = deferredClient()

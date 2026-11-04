@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A copy icon at the right of the `Ducksay` heading and `/duck.copy` in the `/` list copy the whole latest joke, including text
+  the bubble hides behind `…` and replies to `/duck`, as `( o)< {joke} (opencode-ducksay)`. The icon shows `✓` for
+  1200 ms and a `Copied to clipboard` notice follows a successful copy; when there is nothing to copy or the terminal's
+  clipboard is unavailable, a notice explains why.
+
 ## [1.4.0] — 2026-10-28
 
 ### Added

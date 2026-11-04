@@ -99,6 +99,25 @@ Your text goes to the duck's joke request, not to the session: it does not appea
 model does not act on it. It is clipped to 500 characters and treated as words to joke about, not as instructions. A reply
 that fails, comes back empty or takes too long is not added to the dialogue.
 
+## Copying the joke
+
+The copy icon `[copy]` sits at the right of the `Ducksay` heading. A left click on it puts the whole latest joke on the
+terminal clipboard, including the part the bubble hides behind `…` and the answer to `/duck`. The text is wrapped as
+`( o)< {joke} (opencode-ducksay)`; the bubble itself stays plain, and copying the same joke twice does not nest the
+wrapper.
+
+The icon is available while the joke is ready. While the joke is loading, before the first finished turn, while a question
+is open, or with `silent: true`, it is dimmed or hidden and a click does nothing. A successful copy shows `✓` in place of
+the icon for 1200 ms and a `>(o ) Copied to clipboard` notice appears; clicking again restarts both. If the terminal cannot
+take the text, a `>(o ) The terminal won't take the joke: clipboard is unavailable.` notice appears and the icon stays `[copy]`.
+Switching sessions clears the `✓`.
+
+The same action is in the `/` list as `/duck.copy`, with no default keybind. If there is nothing to copy, it shows
+`<(o ) The duck hasn't said anything yet.` and does not touch the clipboard.
+
+Clipboard access uses the terminal's OSC 52 support. It works locally and over SSH, but some terminals ignore the request
+silently; the `✓` then only means the request was sent.
+
 ## The water
 
 The duck is in the water, not above it: the lower line of the drawing shares a row with the first line of the water, and a

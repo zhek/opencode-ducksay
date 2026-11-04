@@ -160,6 +160,9 @@ nothing reports it. The plugin's own options live in the same `cli.json` and are
 | `"auto"` (default) | The sidebar is shown when there is room for it. The duck appears with it. |
 | `"hide"` | The sidebar is not rendered. The duck does not appear at all. |
 
+The copy icon and `/duck.copy` need no option of their own. They follow the sidebar: with `"hide"`, or a sidebar too narrow to
+draw the duck, there is no icon and the command only reports that there is nothing to copy.
+
 No value forces the sidebar on, so `"auto"` still only shows it when the terminal is wide enough — see the next section.
 
 OpenCode also exposes `session.sidebar.toggle` as a configurable keybind, in the same file under `keybinds`. Its default is

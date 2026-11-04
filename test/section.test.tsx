@@ -24,7 +24,7 @@ import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
-import { Ducksay, type DuckCommandResult, type DuckHandle, type DuckSprites } from "../src/tui.tsx"
+import { Ducksay, type DuckCommandResult, type DuckCopyResult, type DuckHandle, type DuckSprites } from "../src/tui.tsx"
 
 /** The session the mounted panel belongs to. */
 const SESSION = "ses_duck"
@@ -38,6 +38,7 @@ const PANEL_CONTENT_WIDTH = 37
  * object. In the plugin the host passes `theme.text.base`, already an RGBA.
  */
 const PRIMARY = RGBA.fromHex("#e5e5e5")
+const MUTED = RGBA.fromHex("#666666")
 
 /** One column at the plugin's default speed. */
 const COLUMN_MS = 1000 / DEFAULT_SWIM_SPEED
@@ -79,6 +80,25 @@ function columnOf(frame: string): number {
 /** True when the duck faces right, i.e. towards the middle from the left edge. */
 function facesRight(frame: string): boolean {
   return RIGHT_MARKERS.some((marker) => frame.includes(marker))
+}
+
+const COPY_ICON = "[copy]"
+const COPY_DONE = "✓"
+const COPY_PREFIX = "( o)< "
+const COPY_SUFFIX = " (opencode-ducksay)"
+
+/** The column the copy icon occupies in the heading row. */
+function iconColumn(frame: string): number {
+  const heading = frame.split("\n")[0] ?? ""
+  const column = Math.max(heading.indexOf(COPY_ICON), heading.indexOf(COPY_DONE))
+  expect(column).toBeGreaterThanOrEqual(0)
+  return column
+}
+
+/** Clicks the copy icon in the heading row. */
+async function clickIcon(harness: Harness, button: 0 | 2 = 0): Promise<void> {
+  const column = iconColumn(await harness.frame())
+  await harness.mouse.click(column, 0, button)
 }
 
 /** A question marker found in a captured frame. */
@@ -137,6 +157,13 @@ interface Harness {
   readonly duck: (text?: string) => DuckCommandResult | undefined
   /** The session the live handle belongs to; absent once unmounted. */
   readonly handleSessionID: () => string | undefined
+  /** Drives the section the way the palette copy command does. */
+  readonly copy: () => DuckCopyResult | undefined
+  /** Text handed to the section's clipboard callback, in order. */
+  readonly copies: readonly string[]
+  /** Copy outcomes the section reported from the icon. */
+  readonly notifies: readonly ("copied" | "failed")[]
+  readonly mouse: TestRendererSetup["mockMouse"]
   /** Form events for the mounted session unless another session is passed. */
   readonly formCreated: (id: string, sessionID?: string) => void
   readonly formReplied: (id: string, sessionID?: string) => void
@@ -172,6 +199,8 @@ interface MountOptions {
   sprites?: DuckSprites
   bubbleText?: string
   joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
+  /** Enables the copy icon; its return value is the clipboard's answer. */
+  copy?: (text: string) => boolean
   /** Makes the 1/50 cow roll deterministic in a test. */
   random?: () => number
   sessionID?: string
@@ -203,6 +232,8 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
   let setRunning = (_value: boolean) => {}
   let activeTimers = 0
   let handle: DuckHandle | undefined
+  const copies: string[] = []
+  const notifies: ("copied" | "failed")[] = []
 
   const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
   const removeForm = (id: string, sessionID: string) => {
@@ -281,6 +312,14 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
               sprites: options.sprites,
               bubbleText: options.bubbleText,
               joke: options.joke,
+              copy: options.copy === undefined
+                ? undefined
+                : (text: string) => {
+                    copies.push(text)
+                    return options.copy!(text)
+                  },
+              notify: (result) => notifies.push(result),
+              muted: MUTED,
               random: options.random,
               states: options.states,
               expose: (next) => {
@@ -321,6 +360,10 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     emit,
     duck: (text) => handle?.duck(text),
     handleSessionID: () => handle?.sessionID,
+    copy: () => handle?.copy(),
+    copies,
+    notifies,
+    mouse: setup.mockMouse,
     formCreated,
     formReplied,
     formCancelled,
@@ -436,6 +479,325 @@ describe("Ducksay section", () => {
     // With `wrapMode="none"` the line stays on one row (clipped at the edge);
     // the default wrap mode would spill the tail onto the next row.
     expect(rows.filter((row) => row.includes("W"))).toHaveLength(1)
+  })
+})
+
+describe("copy icon", () => {
+  async function rest(options: MountOptions = {}) {
+    const harness = await mount({ running: true, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  async function settle() {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  }
+
+  function controlledJoke() {
+    const calls: { resolve: (value: string | undefined) => void }[] = []
+    const joke = () =>
+      new Promise<string | undefined>((resolve) => {
+        calls.push({ resolve })
+      })
+    return { joke, calls }
+  }
+
+  test("puts a clickable icon at the right of the heading without growing the section", async () => {
+    const harness = await mount({ copy: () => true })
+    const frame = await harness.frame()
+    await harness.dispose()
+    const rows = frame.split("\n")
+    const heading = rows[0]!
+
+    expect(heading).toContain("Ducksay")
+    expect(heading).toContain(COPY_ICON)
+    expect(heading.indexOf(COPY_ICON)).toBe(PANEL_WIDTH - 6)
+    // Heading plus nine content rows is ten; the terminal frame is taller.
+    expect(rows[9]).toContain("~")
+    expect(rows[10]?.trim()).toBe("")
+  })
+
+  test("draws the heading bold in the primary colour", async () => {
+    const harness = await mount({ copy: () => true })
+    await harness.frame()
+    const spans = harness.spans()
+    await harness.dispose()
+    const heading = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("Ducksay"))
+
+    expect(heading).toBeDefined()
+    expect(heading!.fg.equals(PRIMARY)).toBe(true)
+    expect(heading!.attributes & 1).toBe(1)
+  })
+
+  test("shows no icon without a clipboard callback", async () => {
+    const harness = await mount()
+    const frame = await harness.frame()
+    await harness.dispose()
+
+    expect(frame).not.toContain(COPY_ICON)
+  })
+
+  test("copies the full joke when the bubble truncates it", async () => {
+    const joke = Array.from({ length: 6 }, (_, index) =>
+      String.fromCharCode(97 + index).repeat(BUBBLE_TEXT_WIDTH),
+    ).join(" ")
+    const { harness, frame } = await rest({ bubbleText: joke, copy: () => true })
+
+    expect(frame).toContain("…")
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual([`${COPY_PREFIX}${joke}${COPY_SUFFIX}`])
+    expect(harness.notifies).toEqual(["copied"])
+    expect(after).toContain(COPY_DONE)
+    expect(after).not.toContain(COPY_PREFIX)
+    expect(after).not.toContain(COPY_SUFFIX)
+  })
+
+  test("copies a /duck answer in full", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ joke: pending.joke, copy: () => true })
+
+    expect(harness.duck("hello")).toBe("started")
+    await settle()
+    pending.calls[0]!.resolve("a direct answer from the duck")
+    await settle()
+    await harness.frame()
+
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual([
+      `${COPY_PREFIX}a direct answer from the duck${COPY_SUFFIX}`,
+    ])
+  })
+
+  test("copies the full text while it is still being typed", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ running: true, joke: pending.joke, copy: () => true })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    await harness.tick(RIGHT_EDGE + 2)
+
+    pending.calls[0]!.resolve("alpha beta gamma delta")
+    await settle()
+    await harness.frame()
+
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual([`${COPY_PREFIX}alpha beta gamma delta${COPY_SUFFIX}`])
+  })
+
+  test("copies twice without nesting the wrapper", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness)
+    await harness.frame()
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(2)
+    expect(harness.notifies).toEqual(["copied", "copied"])
+    expect(harness.copies[0]).toBe(harness.copies[1])
+    expect(harness.copies[0]!.match(/\( o\)</g)).toHaveLength(1)
+    expect(harness.copies[0]!.match(/\(opencode-ducksay\)/g)).toHaveLength(1)
+  })
+
+  test("right click does not copy", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness, 2)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(0)
+    expect(harness.notifies).toHaveLength(0)
+    expect(after).not.toContain(COPY_DONE)
+  })
+
+  test("copying does not change the bubble or the duck", async () => {
+    const { harness, frame } = await rest({ copy: () => true })
+    const beforeColumn = columnOf(frame)
+    const beforeRow = frame.split("\n").findIndex((row) => row.includes(FACING_LEFT_OPEN))
+
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(columnOf(after)).toBe(beforeColumn)
+    expect(after.split("\n").findIndex((row) => row.includes(FACING_LEFT_OPEN))).toBe(beforeRow)
+    expect(after).toContain("Quack-quack!")
+    expect(after).not.toContain(COPY_PREFIX)
+  })
+
+  test("keeps the icon inert while the joke is loading", async () => {
+    const pending = controlledJoke()
+    const harness = await mount({ joke: pending.joke, copy: () => true })
+    expect(harness.duck("hello")).toBe("started")
+    await settle()
+    const frame = await harness.frame()
+    expect(frame).toContain(COPY_ICON)
+    expect(frame).toContain("Quack.")
+
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(0)
+    expect(harness.notifies).toHaveLength(0)
+    expect(after).not.toContain(COPY_DONE)
+  })
+
+  test("keeps the icon inert at the start-up rest", async () => {
+    const harness = await mount({ copy: () => true })
+    const frame = await harness.frame()
+    expect(frame).toContain(COPY_ICON)
+    expect(frame).not.toContain("╭")
+
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(0)
+    expect(after).not.toContain(COPY_DONE)
+  })
+
+  test("keeps the icon inert while a question waits", async () => {
+    const harness = await mount({ copy: () => true })
+    harness.formCreated("question-1")
+    const frame = await harness.frame()
+    expect(frame).toContain(COPY_ICON)
+    expect(frame).not.toContain("╭")
+
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(0)
+    expect(harness.notifies).toHaveLength(0)
+    expect(after).not.toContain(COPY_DONE)
+  })
+
+  test("does not highlight the icon when it is unavailable", async () => {
+    const harness = await mount({ copy: () => true })
+    const frame = await harness.frame()
+    const column = iconColumn(frame)
+    const colour = () => {
+      const spans = harness.spans()
+      for (const line of spans.lines) {
+        for (const span of line.spans) {
+          if (span.text.includes(COPY_ICON)) return span.fg
+        }
+      }
+      return undefined
+    }
+    const before = colour()
+    await harness.mouse.moveTo(column, 0)
+    await harness.frame()
+    const after = colour()
+    await harness.dispose()
+
+    expect(before).toBeDefined()
+    expect(before!.equals(MUTED)).toBe(true)
+    expect(after!.equals(before!)).toBe(true)
+  })
+
+  test("hides the icon under silent and in a narrow lane", async () => {
+    for (const options of [{ silent: true }, { width: 5 }] as MountOptions[]) {
+      const harness = await mount({ copy: () => true, ...options })
+      const frame = await harness.frame()
+      await harness.dispose()
+
+      expect(frame, JSON.stringify(options)).not.toContain(COPY_ICON)
+    }
+  })
+
+  test("shows the confirmation for exactly 1200 ms", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness)
+    const done = await harness.frame()
+    expect(done).toContain(COPY_DONE)
+    expect(harness.activeTimers()).toBe(1)
+
+    const before = await harness.advance(1199)
+    expect(before).toContain(COPY_DONE)
+    const after = await harness.advance(1)
+    expect(after).toContain(COPY_ICON)
+    expect(after).not.toContain(COPY_DONE)
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+
+  test("restarts the confirmation on a second copy", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.advance(600)
+    await clickIcon(harness)
+    expect(await harness.frame()).toContain(COPY_DONE)
+
+    expect(await harness.advance(600)).toContain(COPY_DONE)
+    expect(await harness.advance(600)).toContain(COPY_ICON)
+    await harness.dispose()
+  })
+
+  test("a session switch clears the confirmation", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness)
+    expect(await harness.frame()).toContain(COPY_DONE)
+
+    harness.setSession("ses_other")
+    const switched = await harness.frame()
+    await harness.dispose()
+
+    expect(switched).toContain(COPY_ICON)
+    expect(switched).not.toContain(COPY_DONE)
+  })
+
+  test("a rejected clipboard keeps the icon and reports a failure", async () => {
+    const { harness } = await rest({ copy: () => false })
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.notifies).toEqual(["failed"])
+    expect(after).toContain(COPY_ICON)
+    expect(after).not.toContain(COPY_DONE)
+  })
+
+  test("a failed copy clears the confirmation left by the previous one", async () => {
+    let accepted = true
+    const { harness } = await rest({ copy: () => accepted })
+    await clickIcon(harness)
+    expect(await harness.frame()).toContain(COPY_DONE)
+
+    accepted = false
+    await clickIcon(harness)
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(harness.notifies).toEqual(["copied", "failed"])
+    expect(after).toContain(COPY_ICON)
+    expect(after).not.toContain(COPY_DONE)
+    expect(harness.activeTimers()).toBe(0)
+  })
+
+  test("unmounting stops the confirmation timer", async () => {
+    const { harness } = await rest({ copy: () => true })
+    await clickIcon(harness)
+    await harness.frame()
+    expect(harness.activeTimers()).toBe(1)
+
+    await harness.unmount()
+    expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
   })
 })
 
