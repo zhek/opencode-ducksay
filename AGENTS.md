@@ -17,6 +17,13 @@
 - **README links are absolute.** `README.md` and `README.ru.md` are published on npm and rendered outside this tree, so
   every Markdown link and image in them MUST be a full `https://…` URL — including the language switcher and the license.
   A relative `docs/…` or `LICENSE` link is broken there. `docs/*.md` are not published and may keep relative links.
+- **The demo GIF must match the plugin.** If a change alters anything the README GIFs show — the duck art, the wave
+  pattern, bubble width and wrapping, the Ducksay section title and rows, the `/duck` hint, or the chat window and command
+  menu the generator draws — update `scripts/make-demo-gif.ts` and `scripts/demo-layout.ts` and regenerate both
+  `assets/ducksay-demo.gif` and `assets/ducksay-demo.ru.gif` with `bun run demo:gif` in the same task. This is part of the
+  change, not follow-up work: an outdated GIF shows the reader a plugin that no longer exists. Sprites, waves and the
+  bubble come from `src/`, but the window chrome and layout are drawn by the script, so check the renderer yourself.
+  `test/demo-gif.test.ts` keeps the generator in step with the plugin and must pass after the update.
 - **Changelog first, versions later.** An ordinary PR never touches the version. A user-visible change is added to
   `CHANGELOG.md` under `## Unreleased` at the top of the file, under the same subheadings a released entry uses:
   `### Added`, `### Changed`, `### Fixed`, `### Removed`. Such a PR creates no `## [X.Y.Z]` heading, adds no release link,
@@ -48,7 +55,10 @@ drift.
 bun test                      # full suite
 bun test test/duck.test.ts    # single file
 bunx tsc --noEmit             # typecheck
+bun run demo:gif              # regenerate both README GIFs (en + ru)
 ```
+
+`bun run demo:gif ru` regenerates one locale. The generator needs `@napi-rs/canvas` and `gifenc` from devDependencies.
 
 The runner is **Bun**, not Node. Rendering tests use `testRender` and `captureCharFrame` from `@opentui/solid`, which sit on
 OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching runners.
