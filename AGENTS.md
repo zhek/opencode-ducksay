@@ -101,6 +101,10 @@ A stale cached server can hide edits. Use `--standalone` for a private server, a
 binary — it is not a Node process, so a debugger on *your* Node process will not catch plugin code. Debug via logs and
 `console.error` in `setup`.
 
+A **running TUI also keeps the module graph it loaded**: discovery watches the plugin file itself, not the modules it
+imports. Edits to `src/*.ts` therefore do not reach a live session — `touch index.ts tui.ts src/tui.tsx`, or restart
+OpenCode, before judging what the running plugin draws.
+
 ## Plugin structure that matters
 
 - CLI/TUI plugins are imported from **`@opencode/plugin/tui`** and OpenCode resolves that import at runtime — do not add
