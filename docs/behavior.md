@@ -71,7 +71,8 @@ count.
 
 The bubble is 29 columns wide with a 25-column text field. Text wraps by word into at most five lines; a word longer
 than the field is broken, and text that does not fit ends with `…`. A generated answer is shortened to what the bubble can
-show.
+show. Width is counted in terminal columns, not characters: an East Asian or emoji character takes the two columns the
+terminal gives it and is never split in half, so a joke written in any script still closes its frame on the right.
 
 A narrow sidebar, narrower than the drawing, leaves no room for a bubble: the duck does not ask for a joke there, though
 the question marker keeps working.
@@ -127,7 +128,8 @@ at that moment — the bubble, the swimming duck, the water, the question marker
 
 The card carries its own font, so nothing on the reader's machine is needed: English, Russian and the rest of the Cyrillic
 a joke uses (Serbian `ј`, `љ`, `њ`, `ћ`, `џ`, Ukrainian `і`, `ї`, `є`, `ґ`), accented Latin, the bubble frame and the
-plugin's marks all print. A character the font genuinely lacks becomes a small hollow box rather than an error.
+plugin's marks all print. An East Asian character or an emoji becomes a hollow box two columns wide — the same two the
+terminal spends on it — and any other missing glyph a one-column box; the line never shifts, and neither is an error.
 
 Pictures go to `.opencode/ducksay/screenshots/` in the project as `ducksay-YYYY-MM-DD-HH-mm-ss.png`, in local time. If two
 pictures are taken in the same second, `-2`, `-3` and so on keep both. The folder comes with a `.gitignore` of its own

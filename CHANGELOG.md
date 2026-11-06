@@ -9,7 +9,13 @@
   `ducksay-YYYY-MM-DD-HH-mm-ss.png` (`-2`, `-3` for a second picture in the same second). The folder writes its own
   `.gitignore`, so pictures stay out of git. The icon works in every state of the duck, including `silent: true`, shows `✓`
   for 1200 ms, and a `Screenshot saved` notice follows. The card brings its own font — English, Russian and other Cyrillic,
-  accented Latin; a character it lacks becomes a small hollow box.
+  accented Latin — and a character it lacks becomes a box of the right width, so lines keep their shape.
+
+### Fixed
+
+- A joke in East Asian characters or emoji broke the bubble: wrapping counted keyboard characters instead of the columns
+  the terminal spends, so a 25-character line could be 31 columns wide and the closing `│` fell off the right edge. Two
+  now count as two, accents take no room of their own, and a wide character is never cut in half.
 
 ## [1.5.0] — 2026-11-04
 

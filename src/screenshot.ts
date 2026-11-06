@@ -14,6 +14,7 @@ import { deflateSync } from "node:zlib"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { CELL_HEIGHT, CELL_WIDTH, TITLE_WIDTH, cellAlpha, titleCellAlpha } from "./screenshot-font.ts"
+import { columnsOf } from "./width.ts"
 
 /** The title printed above the scene. */
 export const SCREENSHOT_TITLE = "OpenCode Ducksay"
@@ -179,11 +180,13 @@ function hideFromGit(folder: string): void {
 }
 
 /**
- * Copies a run of text into the picture, one cell per character.
+ * Copies a run of text into the picture, one character per terminal column span.
  *
  * `columns` is the width of the cells `cellOf` returns and the step between two
  * characters: the scene draws 17-column cells, the heading 13-column ones, both
  * 38 rows tall, because the GIF sets the section label smaller than its rows.
+ * A character may span two of them — see `columnsOf` — and a row stops at the
+ * lane edge, exactly where the terminal cuts it.
  */
 function drawLine(
   pixels: Uint8Array,
@@ -194,20 +197,31 @@ function drawLine(
   y: number,
   ink: readonly number[],
   columns: number,
-  cellOf: (codePoint: number) => readonly number[],
+  cellOf: (codePoint: number, span: number) => readonly number[],
   maxColumns: number,
 ): void {
   let column = 0
   for (const character of text) {
-    if (column >= maxColumns) break
-    const cell = cellOf(character.codePointAt(0) ?? 0x20)
-    drawCell(pixels, width, height, cell, columns, x + column * columns, y, ink)
-    column += 1
+    const codePoint = character.codePointAt(0) ?? 0x20
+    const span = columnsOf(codePoint)
+    if (span === 0) continue
+    if (column + span > maxColumns) break
+    drawCell(pixels, width, height, cellOf(codePoint, span), columns * span, x + column * columns, y, ink)
+    column += span
   }
 }
 
-/** The scene cell for one code point, with a hollow box for anything unknown. */
-function glyph(codePoint: number): readonly number[] {
+/**
+ * The scene cell for one code point, two cells wide when the character is, and
+ * a hollow box for anything the font does not carry.
+ *
+ * The built-in face has no East Asian glyphs — a subset that covers them would
+ * be megabytes, not a table this plugin ships as source — so `鸭` comes out as a
+ * box standing in the two columns the terminal spends on it. The joke stays
+ * where the reader saw it; only the letter is missing.
+ */
+function glyph(codePoint: number, span: number): readonly number[] {
+  if (span > 1) return outlineBox(CELL_WIDTH * span)
   if (codePoint < 0x20 || codePoint === 0x7f) return SPACE
   const cell = cellAlpha(codePoint)
   if (cell === undefined) return MISSING
@@ -215,8 +229,8 @@ function glyph(codePoint: number): readonly number[] {
 }
 
 /** The heading cell: the bold weight of the same face, in narrower cells. */
-function titleCell(codePoint: number): readonly number[] {
-  return titleCellAlpha(codePoint) ?? outlineBox(TITLE_WIDTH)
+function titleCell(codePoint: number, span: number): readonly number[] {
+  return titleCellAlpha(codePoint) ?? outlineBox(TITLE_WIDTH * span)
 }
 
 /**

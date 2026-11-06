@@ -234,6 +234,64 @@ describe("the screenshot card", () => {
     }
   })
 
+  test("gives a wide character the two columns the terminal gives it", () => {
+    const bitmap = renderScreenshotBitmap(frame(["鸭x"], 6))
+    const top = contentTop() + ROW
+    const inkIn = (cell: number) => {
+      let lit = 0
+      const from = contentLeft() + cell * CELL
+      for (let y = top; y < top + ROW; y++) {
+        for (let x = from; x < from + CELL; x++) if (isInk(bitmap, x, y)) lit++
+      }
+      return lit
+    }
+
+    // One box, two cells: the placeholder spans the pair the glyph occupies, so
+    // the `x` that follows lands in the third cell and not the second.
+    expect(inkIn(0)).toBeGreaterThan(0)
+    expect(inkIn(1)).toBeGreaterThan(0)
+    expect(inkIn(2)).toBeGreaterThan(0)
+    expect(inkIn(3)).toBe(0)
+  })
+
+  test("counts a wide character twice when it clips a row at the lane edge", () => {
+    const bitmap = renderScreenshotBitmap(frame(["鸭鸭鸭鸭鸭鸭"], 5))
+    const top = contentTop() + ROW
+    const inkIn = (cell: number) => {
+      let lit = 0
+      const from = contentLeft() + cell * CELL
+      for (let y = top; y < top + ROW; y++) {
+        for (let x = from; x < from + CELL; x++) if (isInk(bitmap, x, y)) lit++
+      }
+      return lit
+    }
+
+    // A five-column lane holds two whole glyphs — four columns — and the third
+    // one starts past the edge, so the fifth cell stays empty. Counting
+    // characters would have squeezed five boxes into those five columns.
+    for (const cell of [0, 1, 2, 3]) expect(inkIn(cell), `cell ${cell} of a wide run`).toBeGreaterThan(0)
+    expect(inkIn(4)).toBe(0)
+  })
+
+  test("lets a combining mark share the column of the character it hangs on", () => {
+    const bitmap = renderScreenshotBitmap(frame(["e\u0301x"], 4))
+    const top = contentTop() + ROW
+    const inkIn = (cell: number) => {
+      let lit = 0
+      const from = contentLeft() + cell * CELL
+      for (let y = top; y < top + ROW; y++) {
+        for (let x = from; x < from + CELL; x++) if (isInk(bitmap, x, y)) lit++
+      }
+      return lit
+    }
+
+    // `e` plus a combining acute (U+0301) is still one column, so `x` keeps the
+    // second cell instead of sliding one to the right.
+    expect(inkIn(0)).toBeGreaterThan(0)
+    expect(inkIn(1)).toBeGreaterThan(0)
+    expect(inkIn(2)).toBe(0)
+  })
+
   test("keeps the duck's underline attached to its brackets", () => {
     function firstInkRow(codePoint: number): number {
       const cell = cellAlpha(codePoint)!
