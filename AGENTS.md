@@ -9,7 +9,10 @@
 - **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests, and update the project
   documentation (`README.md`, `README.ru.md`, `docs/configuration.md`, `docs/configuration.ru.md`, the `## Unreleased`
   section of `CHANGELOG.md`).
-  Documentation is part of the task, not a follow-up. The documentation task never bumps the version.
+  Documentation is part of the task, not a follow-up. The documentation task never bumps the version. If the change grows
+  after both tasks are ticked and new tasks are added, reopen them: clear their checkboxes, keep them at the end of the
+  list, and renumber them along with any new section. The old tick belongs to the old scope — the added code has not been
+  tested or documented.
 - **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**, each
   user-facing document with a Russian counterpart: `README.ru.md` next to `README.md` and `docs/configuration.ru.md` next
   to `docs/configuration.md`. Both versions must change in the same task, and every document added to `docs/` gets a
