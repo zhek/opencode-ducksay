@@ -21,11 +21,13 @@
  * the duck only swims right and docks at the right edge, so the leftward
  * midline crossing that triggers the cow never happens.
  */
+/// <reference path="./gifenc.d.ts" />
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createCanvas, GlobalFonts } from "@napi-rs/canvas"
 import { GIFEncoder, quantize, applyPalette } from "gifenc"
+import { columnsOf } from "../src/width.ts"
 import {
   COMMAND_MENU_START,
   COMMAND_SEND_START,
@@ -126,6 +128,67 @@ const LANE_X = SIDEBAR_X + LANE_INSET
 const ROW_HEAD = 162
 const ROW0 = 180
 const rowY = (n: number) => ROW0 + n * SIDE_LH
+
+/**
+ * The bubble's vertical strokes, which the font stops short of the line box.
+ *
+ * `│`, `╭` and `╮` reach only partway down the 19 px line, so the last pixels
+ * are empty and the frame would break at every row join. The PNG card stretches
+ * the same glyphs to the cell edge; here the missing piece is painted after the
+ * row. Where the stroke ends and how wide it is depends on the face, so the
+ * chosen font is measured instead of assuming DejaVu's metrics.
+ */
+const STROKE = measureStroke()
+const STRETCHED_VERTICAL = new Set([0x2502, 0x256d, 0x256e])
+const STROKE_WIDTH = 1.25
+const CELL_BOTTOM = SIDE_LH / 2
+
+/** Measures the vertical stroke of `│` in CSS pixels against the line's middle. */
+function measureStroke(): { bottom: number; center: number } {
+  const probe = createCanvas(40 * SCALE, 40 * SCALE)
+  const g = probe.getContext("2d")
+  g.scale(SCALE, SCALE)
+  g.font = `${SIDE_SIZE}px ${FONT}`
+  g.fillStyle = "#ffffff"
+  g.textBaseline = "middle"
+  g.textAlign = "left"
+  g.fillText("│", 0, 20)
+  const data = g.getImageData(0, 0, 40 * SCALE, 40 * SCALE).data
+  let bottom = 20
+  let left = 40
+  let right = 0
+  let found = false
+  for (let y = 0; y < 40 * SCALE; y++) {
+    for (let x = 0; x < 40 * SCALE; x++) {
+      if ((data[(y * 40 * SCALE + x) * 4] ?? 0) <= 60) continue
+      found = true
+      bottom = Math.max(bottom, y / SCALE)
+      left = Math.min(left, x / SCALE)
+      right = Math.max(right, x / SCALE)
+    }
+  }
+  if (!found) return { bottom: 20, center: CHAR_SIDE / 2 }
+  // The last lit pixel's row ends one device pixel later, hence the extra step.
+  return { bottom: bottom + 1 / SCALE - 20, center: (left + right) / 2 }
+}
+
+/** Paints the part of the bubble frame the font leaves empty at the row join. */
+function stretchFrame(row: string, index: number) {
+  const middle = rowY(index)
+  let column = 0
+  for (const character of row) {
+    const codePoint = character.codePointAt(0) ?? 0x20
+    const span = columnsOf(codePoint)
+    if (span === 0) continue
+    if (STRETCHED_VERTICAL.has(codePoint)) {
+      const x = LANE_X + column * CHAR_SIDE + STROKE.center
+      const top = middle + STROKE.bottom - 0.5
+      sctx.fillStyle = C.text
+      sctx.fillRect(x - STROKE_WIDTH / 2, top, STROKE_WIDTH, middle + CELL_BOTTOM + 0.5 - top)
+    }
+    column += span
+  }
+}
 
 function roundRect(g: any, x: number, y: number, w: number, h: number, r: number) {
   const radius = Math.min(r, w / 2, h / 2)
@@ -317,6 +380,7 @@ function drawSidebar(state: FrameState, demo: DemoScenario) {
   // The rows themselves come from the plugin's sprites, wave and bubble modules.
   for (const [index, row] of sidebarRows(state).entries()) {
     text(g, row, LANE_X, rowY(index), C.text, { size: SIDE_SIZE })
+    stretchFrame(row, index)
   }
 
   const hintY = 360
@@ -342,16 +406,24 @@ function render(i: number, demo: DemoScenario) {
   octx.drawImage(scene, 0, 0, W, H)
 }
 
+/** The sidebar metrics the GIF draws with, so a test can sample its pixels. */
+export const GIF_LAYOUT = {
+  width: W,
+  height: H,
+  laneX: LANE_X,
+  charWidth: CHAR_SIDE,
+  rowY,
+} as const
+
+/** Renders frame `i` and returns the finished picture's RGBA pixels. */
+export function renderDemoFrame(i: number, locale: Locale = "en"): Uint8ClampedArray {
+  render(i, SCENARIOS[locale])
+  return octx.getImageData(0, 0, W, H).data
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ASSETS = join(HERE, "../assets")
 const log = (message: string) => process.stdout.write(message + "\n")
-
-const requested = process.argv[2]
-if (requested !== undefined && !LOCALES.includes(requested as Locale)) {
-  console.error(`unknown locale "${requested}"; expected ${LOCALES.join(", ")}`)
-  process.exit(1)
-}
-const selected: readonly Locale[] = requested === undefined ? LOCALES : [requested as Locale]
 
 async function generate(locale: Locale) {
   const demo = SCENARIOS[locale]
@@ -413,4 +485,12 @@ async function generate(locale: Locale) {
   log(`${locale}: wrote ${outFile} (${(bytes.length / 1024).toFixed(0)} KiB, ${TOTAL} frames)`)
 }
 
-for (const locale of selected) await generate(locale)
+if (import.meta.main) {
+  const requested = process.argv[2]
+  if (requested !== undefined && !LOCALES.includes(requested as Locale)) {
+    console.error(`unknown locale "${requested}"; expected ${LOCALES.join(", ")}`)
+    process.exit(1)
+  }
+  const selected: readonly Locale[] = requested === undefined ? LOCALES : [requested as Locale]
+  for (const locale of selected) await generate(locale)
+}

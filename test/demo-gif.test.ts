@@ -57,6 +57,7 @@ import {
   waterVisible,
   type FrameState,
 } from "../scripts/demo-layout.ts"
+import { GIF_LAYOUT, renderDemoFrame } from "../scripts/make-demo-gif.ts"
 
 const CASES = [
   {
@@ -385,5 +386,47 @@ describe("the PNG card and the demo GIF", () => {
     expect(SCREENSHOT_OUTLINE).toBe(2)
     expect(SCREENSHOT_BACKGROUND).toBe(SIDEBAR_BACKGROUND)
     expect(SCREENSHOT_INK).toBe(SIDEBAR_TEXT)
+  })
+})
+
+describe("the demo GIF bubble frame", () => {
+  /** The brightest channel in the three pixels around `x`, to tolerate antialiasing. */
+  function brightness(pixels: Uint8ClampedArray, x: number, y: number): number {
+    let brightest = 0
+    for (let offset = -1; offset <= 1; offset++) {
+      const at = (y * GIF_LAYOUT.width + x + offset) * 4
+      for (let channel = 0; channel < 3; channel++) {
+        brightest = Math.max(brightest, pixels[at + channel] ?? 0)
+      }
+    }
+    return brightest
+  }
+
+  test("keeps the bubble border continuous between rows", () => {
+    // The font's box-drawing stroke stops a few pixels short of the line box, so
+    // the rendered frame must close that gap itself. A background pixel in a
+    // border column is the bug: the frame reads as dashed instead of solid.
+    for (const locale of LOCALES) {
+      for (const frame of [REST_START, FIRST_HOLD_START, SECOND_HOLD_START, TOTAL - 1]) {
+        const state = frameState(frame, locale)
+        expect(state.bubble, `frame ${frame}`).not.toBeNull()
+
+        const side = state.direction === 1 ? "right" : "left"
+        const at = side === "right" ? state.column + DUCK_WIDTH : state.column - BUBBLE_WIDTH
+        const rows = bubbleRows(wrapBubbleText(state.bubble!.text), side)
+        const top = rows.findIndex((row) => row !== undefined)
+        const pixels = renderDemoFrame(frame, locale)
+
+        for (const column of [at, at + BUBBLE_WIDTH - 1]) {
+          const x = Math.round(GIF_LAYOUT.laneX + (column + 0.5) * GIF_LAYOUT.charWidth)
+          for (let y = Math.round(GIF_LAYOUT.rowY(top)); y < Math.round(GIF_LAYOUT.rowY(BUBBLE_MAX_LINES)) - 1; y++) {
+            expect(
+              brightness(pixels, x, y),
+              `${locale} frame ${frame}: gap in the bubble frame at x=${x}, y=${y}`,
+            ).toBeGreaterThan(140)
+          }
+        }
+      }
+    }
   })
 })
