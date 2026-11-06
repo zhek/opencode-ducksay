@@ -48,6 +48,7 @@ import {
 } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
 import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
+import { saveScreenshot } from "./screenshot.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
   THINKING_STEPS,
@@ -117,11 +118,17 @@ const SILENT_TOAST = "<(o ) The duck keeps mum."
 /** The copy glyph shown at the right of the heading. */
 const COPY_ICON = "[copy]"
 
-/** The confirmation shown in the icon after a successful copy. */
+/** The screenshot glyph, one column to the left of `[copy]`. */
+const IMG_ICON = "[img]"
+
+/** The confirmation shown in the icon after a successful copy or screenshot. */
 const COPY_DONE = "✓"
 
-/** How long the confirmation stays before the icon returns to `COPY_ICON`. */
+/** How long the confirmation stays before the icon returns to its label. */
 const COPY_FEEDBACK_MS = 1200
+
+/** The screenshot confirmation lives as long as the copy one. */
+const SCREENSHOT_FEEDBACK_MS = 1200
 
 /** The wrapper put around a copied joke; the bubble itself stays plain. */
 const COPY_PREFIX = "( o)< "
@@ -130,10 +137,18 @@ const COPY_SUFFIX = " (opencode-ducksay)"
 /** What a copy attempt did, so both the icon and the command can report it. */
 export type DuckCopyResult = "copied" | "empty" | "failed"
 
+/** What a screenshot attempt did: written, not possible, or failed to write. */
+export type DuckScreenshotResult = "saved" | "empty" | "failed"
+
 /** Copy feedback shared by the icon and the `/duck.copy` command. */
 const COPIED_TOAST = ">(o ) Copied to clipboard"
 const EMPTY_COPY_TOAST = "<(o ) The duck hasn't said anything yet."
 const FAILED_COPY_TOAST = ">(o ) The terminal won't take the joke: clipboard is unavailable."
+
+/** Screenshot feedback shared by the icon and the `/duck.img` command. */
+const SCREENSHOT_SAVED_TOAST = ">(o ) Screenshot saved"
+const FAILED_SCREENSHOT_TOAST = ">(o ) Failed to save screenshot."
+const NO_FRAME_TOAST = "<(o ) The duck isn't in frame yet."
 
 /** What a `/duck` call did, so `setup` knows which toast to show. */
 export type DuckCommandResult = "started" | "muted" | "busy"
@@ -144,6 +159,7 @@ export interface DuckHandle {
   readonly sessionID: string | undefined
   duck(text: string | undefined): DuckCommandResult
   copy(): DuckCopyResult
+  screenshot(): DuckScreenshotResult
 }
 
 /**
@@ -213,6 +229,14 @@ export function Ducksay(props: {
   copy?: (text: string) => boolean
   /** Reports a copy attempt made from the icon; the command reports its own. */
   notify?: (result: "copied" | "failed") => void
+  /**
+   * Saves the scene as a PNG. It receives the nine rows and the lane width, so
+   * the picture is exactly what the section shows; without it the heading has
+   * no `[img]` icon.
+   */
+  screenshot?: (frame: { rows: readonly string[]; width: number }) => DuckScreenshotResult
+  /** Reports a screenshot attempt made from the icon; the command reports its own. */
+  notifyScreenshot?: (result: DuckScreenshotResult) => void
   /** Colour of a dimmed, unavailable icon. */
   muted?: RGBA
   /** Registers the live handle the `/duck` command drives; `undefined` clears it. */
@@ -268,12 +292,21 @@ export function Ducksay(props: {
   // and whether the pointer is over it. Both are written imperatively below.
   const [copied, setCopied] = createSignal(false)
   const [hovered, setHovered] = createSignal(false)
+  // The screenshot icon keeps its own confirmation and hover state, so the two
+  // icons can flash independently without sharing a timer.
+  const [shotSaved, setShotSaved] = createSignal(false)
+  const [shotHovered, setShotHovered] = createSignal(false)
   // Refs are assigned after the first effect pass under Bun's JSX transform, so
   // this signal makes the icon effect run again once both nodes exist.
   const [iconReady, setIconReady] = createSignal(false)
+  const [shotReady, setShotReady] = createSignal(false)
   let stopCopyFeedback: (() => void) | undefined
+  let stopShotFeedback: (() => void) | undefined
   let iconBox: BoxRenderable | undefined
   let iconText: TextRenderable | undefined
+  let shotBox: BoxRenderable | undefined
+  let shotText: TextRenderable | undefined
+  let gapBox: BoxRenderable | undefined
   /**
    * True while the displayed session has a pending form. It is a memo so the
    * marker timer and the rest timers only restart when the state flips, not
@@ -305,6 +338,27 @@ export function Ducksay(props: {
     stopCopyFeedback = stop
   }
 
+  const clearShotFeedback = () => {
+    stopShotFeedback?.()
+    stopShotFeedback = undefined
+    setShotSaved(false)
+  }
+
+  /** The same 1200 ms confirmation as the copy icon, with its own timer. */
+  const startShotFeedback = () => {
+    clearShotFeedback()
+    setShotSaved(true)
+    let stop: (() => void) | undefined
+    stop = (props.schedule ?? defaultSchedule)(() => {
+      stop?.()
+      stop = undefined
+      stopShotFeedback = undefined
+      setShotSaved(false)
+      props.renderer?.requestRender()
+    }, SCREENSHOT_FEEDBACK_MS)
+    stopShotFeedback = stop
+  }
+
   // The lane is measured after the rows are built. Reading its width through a
   // signal means the first real measurement releases a bubble that was waiting
   // for the room, and a resize is followed without a special case.
@@ -313,6 +367,12 @@ export function Ducksay(props: {
   let lastBusy = busy()
   let request: JokeRequest | undefined
   const lines: (TextRenderable | undefined)[] = []
+  /**
+   * The nine rows as they were last painted. The screenshot icon hands them to
+   * `props.screenshot` so the PNG is the frame the reader was looking at, not a
+   * recomposition that could disagree with the screen.
+   */
+  let paintedRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
 
   const cancelJoke = () => {
     request?.cancel()
@@ -348,6 +408,7 @@ export function Ducksay(props: {
     const previousSessionID = activeSessionID
     activeSessionID = nextSessionID
     clearCopyFeedback()
+    clearShotFeedback()
 
     if (previousSessionID !== undefined && props.states !== undefined) {
       writeSnapshot()
@@ -447,6 +508,30 @@ export function Ducksay(props: {
     startCopyFeedback()
     return "copied"
   }
+  /**
+   * A screenshot needs a lane wide enough for the duck and a writer to hand the
+   * frame to. Unlike copying it does not care about the speech, the bubble or a
+   * pending question: the picture is a snapshot of whatever is on screen.
+   */
+  const canScreenshot = () => props.screenshot !== undefined && limit() > 0
+  /**
+   * Writes the last painted frame. The result is returned rather than toasted,
+   * so the icon and `/duck.img` show the same message from one place in
+   * `setup`; `empty` means there is no section worth photographing.
+   */
+  const capture = (): DuckScreenshotResult => {
+    if (!canScreenshot()) return "empty"
+    let result: DuckScreenshotResult
+    try {
+      const written = props.screenshot?.({ rows: paintedRows, width: laneWidth() })
+      result = written === "saved" ? "saved" : written === "empty" ? "empty" : "failed"
+    } catch {
+      result = "failed"
+    }
+    if (result === "saved") startShotFeedback()
+    else clearShotFeedback()
+    return result
+  }
 
   const art = () => {
     const set = sprites()
@@ -486,12 +571,31 @@ export function Ducksay(props: {
       iconText.attributes = available && over ? TextAttributes.BOLD : TextAttributes.NONE
     }
     if (iconBox !== undefined) iconBox.visible = shown
+    if (gapBox !== undefined) gapBox.visible = shown
+    props.renderer?.requestRender()
+  })
+
+  // The screenshot icon is always lit while the lane can hold the duck: it has
+  // no "nothing to copy" state, so it never dims. Its label, confirmation and
+  // hover weight are written the same imperative way as the copy icon's.
+  createEffect(() => {
+    const ready = shotReady()
+    const done = shotSaved()
+    const over = shotHovered()
+    const available = canScreenshot()
+    if (ready && shotText !== undefined) {
+      shotText.content = available ? (done ? COPY_DONE : IMG_ICON) : ""
+      shotText.fg = props.primary
+      shotText.attributes = available && over ? TextAttributes.BOLD : TextAttributes.NONE
+    }
+    if (shotBox !== undefined) shotBox.visible = available
     props.renderer?.requestRender()
   })
 
   // Losing the joke, the bubble or the clipboard must not leave a stale `✓`.
   createEffect(() => {
     if (!canCopy()) clearCopyFeedback()
+    if (!canScreenshot()) clearShotFeedback()
   })
 
   /**
@@ -612,6 +716,8 @@ export function Ducksay(props: {
     for (const [index, text] of lines.entries()) {
       if (text !== undefined) text.content = rows[index] ?? ""
     }
+    // Keep the frame the icon will hand to the screenshot writer.
+    paintedRows = rows
   }
 
   /**
@@ -883,10 +989,12 @@ export function Ducksay(props: {
     },
     duck,
     copy: copyJoke,
+    screenshot: capture,
   })
   onCleanup(() => {
     props.expose?.(undefined)
     clearCopyFeedback()
+    clearShotFeedback()
   })
 
   // A request belongs to the end of a turn, not to the rest pose: it starts
@@ -1128,6 +1236,49 @@ export function Ducksay(props: {
         </text>
         <box flexGrow={1} height={1} />
         <box
+          width={5}
+          height={1}
+          flexShrink={0}
+          justifyContent="center"
+          alignItems="center"
+          onMouseUp={(event) => {
+            if (event.button !== 0) return
+            const result = capture()
+            if (result !== "empty") props.notifyScreenshot?.(result)
+          }}
+          onMouseOver={() => setShotHovered(true)}
+          onMouseOut={() => setShotHovered(false)}
+          ref={(box) => {
+            shotBox = box
+            box.visible = props.screenshot !== undefined && limit() > 0
+          }}
+        >
+          <text
+            wrapMode="none"
+            fg={props.primary}
+            ref={(text) => {
+              shotText = text
+              text.content = props.screenshot !== undefined && limit() > 0 ? IMG_ICON : ""
+              text.attributes = TextAttributes.NONE
+              setShotReady(true)
+            }}
+          >
+            {IMG_ICON}
+          </text>
+        </box>
+        {/* The one-column gap belongs to the copy icon: when it is hidden, the
+            screenshot icon moves flush to the right edge instead of leaving a
+            hole behind. */}
+        <box
+          width={1}
+          height={1}
+          flexShrink={0}
+          ref={(box) => {
+            gapBox = box
+            box.visible = props.copy !== undefined && props.silent !== true && limit() > 0
+          }}
+        />
+        <box
           width={6}
           height={1}
           flexShrink={0}
@@ -1251,6 +1402,47 @@ export default Plugin.define({
         return false
       }
     }
+    /**
+     * The project root a screenshot belongs to: where the session works, or the
+     * location the TUI is showing, or the location the server calls default.
+     * All three are absolute paths the host hands over, so a plugin attached to
+     * a remote server never writes into whatever directory the TUI happened to
+     * start in. `location` is optional here because the record arrives over the
+     * wire: an older or partial session must send the picture to the default
+     * location rather than lose it.
+     */
+    const projectDirectory = (sessionID: string): string =>
+      context.data.session.get(sessionID)?.location?.directory
+      ?? context.location?.directory
+      ?? context.data.location.default().directory
+    /**
+     * Writes the frame the section handed over. A missing project root is a
+     * failed write as far as the reader is concerned: nothing was saved.
+     */
+    const saveFrame = (
+      sessionID: string | undefined,
+      frame: { rows: readonly string[]; width: number },
+    ): DuckScreenshotResult => {
+      if (sessionID === undefined) return "empty"
+      try {
+        saveScreenshot({ ...frame, directory: projectDirectory(sessionID), primary: context.theme.text.base })
+        return "saved"
+      } catch {
+        return "failed"
+      }
+    }
+    const reportScreenshot = (result: DuckScreenshotResult) => {
+      if (result === "saved") showToast(SCREENSHOT_SAVED_TOAST, "success")
+      else if (result === "failed") showToast(FAILED_SCREENSHOT_TOAST, "error")
+      else showToast(NO_FRAME_TOAST, "info")
+    }
+    const screenshotCommand = () => {
+      const sessionID = currentSession()
+      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+        ? handle.screenshot()
+        : "empty"
+      reportScreenshot(result)
+    }
 
     // `slot` already returns its own teardown: it unregisters the claim.
     const unregisterSection = context.ui.slot({
@@ -1273,6 +1465,8 @@ export default Plugin.define({
         copy: copyToClipboard,
         notify: reportCopy,
         muted: context.theme.text.muted,
+        screenshot: (frame) => saveFrame(input.sessionID, frame),
+        notifyScreenshot: reportScreenshot,
         expose: (next) => {
           handle = next
         },
@@ -1312,6 +1506,13 @@ export default Plugin.define({
             bind: false,
             slash: { name: "duck.copy" },
             run: copyCommand,
+          },
+          {
+            id: "duck.img",
+            title: "Create a screenshot of the duck",
+            bind: false,
+            slash: { name: "duck.img" },
+            run: screenshotCommand,
           },
         ],
       }))

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { displayWidth } from "../src/width.ts"
 import {
   BUBBLE_CONTENT_ROWS,
   BUBBLE_MAX_LINES,
@@ -112,6 +113,36 @@ describe("bubbleRows", () => {
     const rows = bubbleRows(["quack"], "left")
     const line = rows.find((row) => row?.includes("quack"))!
     expect(line).toBe("│ quack" + " ".repeat(BUBBLE_TEXT_WIDTH - 5) + " │")
+  })
+
+  test("keeps the frame closed around East Asian and emoji text", () => {
+    // A terminal spends two columns on 鸭 and on 😀, so counting characters let
+    // such a joke run past the field and pushed the closing `│` off screen —
+    // the frame broke exactly where the text was widest.
+    const joke = "鸭曰代码能跑 — юникод понимает, компилятор нет 😀"
+    for (const line of wrapBubbleText(joke)) {
+      expect(displayWidth(line), line).toBeLessThanOrEqual(BUBBLE_TEXT_WIDTH)
+    }
+    const rows = bubbleRows(wrapBubbleText(joke), "left")
+    for (const row of rows) {
+      if (row === undefined) continue
+      expect(displayWidth(row), row).toBe(BUBBLE_WIDTH)
+      if (row.includes("│")) expect(row.at(-1)).toBe("│")
+    }
+  })
+
+  test("wraps a run of wide characters into field-wide chunks", () => {
+    // Twelve whole glyphs fill 24 of the 25 columns; the thirteenth would need
+    // two, so it starts the next line instead of being cut in half.
+    expect(wrapBubbleText("鸭".repeat(30))).toEqual(["鸭".repeat(12), "鸭".repeat(12), "鸭".repeat(6)])
+  })
+
+  test("ends a clipped wide message with an ellipsis inside the field", () => {
+    const lines = wrapBubbleText("鸭 ".repeat(60))
+    expect(lines).toHaveLength(BUBBLE_MAX_LINES)
+    const last = lines[BUBBLE_MAX_LINES - 1]!
+    expect(last.endsWith("…")).toBe(true)
+    expect(displayWidth(last)).toBeLessThanOrEqual(BUBBLE_TEXT_WIDTH)
   })
 
   test("turns the tail around at the right edge, one column off the frame", () => {

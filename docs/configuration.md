@@ -160,8 +160,10 @@ nothing reports it. The plugin's own options live in the same `cli.json` and are
 | `"auto"` (default) | The sidebar is shown when there is room for it. The duck appears with it. |
 | `"hide"` | The sidebar is not rendered. The duck does not appear at all. |
 
-The copy icon and `/duck.copy` need no option of their own. They follow the sidebar: with `"hide"`, or a sidebar too narrow to
-draw the duck, there is no icon and the command only reports that there is nothing to copy.
+The copy and screenshot icons, `/duck.copy` and `/duck.img`, need no option of their own. They follow the sidebar: with
+`"hide"`, or a sidebar too narrow to draw the duck, there is no icon and the commands only report that there is nothing to
+copy or photograph. Screenshots are written to `.opencode/ducksay/screenshots/` in the project, and that folder brings
+its own `.gitignore` with a single `*`, so the pictures are not committed by accident.
 
 No value forces the sidebar on, so `"auto"` still only shows it when the terminal is wide enough — see the next section.
 

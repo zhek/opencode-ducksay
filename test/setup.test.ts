@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { render } from "@opentui/solid"
-import { ManualClock, createTestRenderer } from "@opentui/core/testing"
+import { ManualClock, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
 import type { CliRenderer } from "@opentui/core"
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
@@ -107,6 +110,13 @@ interface ShownToast {
   readonly duration?: number
 }
 
+/**
+ * A default location no test should reach: it lives under the system temp
+ * directory, so a fallback that is never exercised cannot write into the
+ * repository the plugin is developed in.
+ */
+const DEAD_DEFAULT = join(tmpdir(), "ducksay-default-location")
+
 interface Fake {
   readonly context: Context
   readonly claims: Record<string, unknown>[]
@@ -134,6 +144,8 @@ function fake(
     project?: Project
     branch?: string
     client?: JokeClient
+    /** Where the server's default location points; a screenshot lands there. */
+    defaultDirectory?: string
   } = {},
 ): Fake {
   const claims: Record<string, unknown>[] = []
@@ -176,6 +188,7 @@ function fake(
         get: (projectID: string) => (projectID === PROJECT ? options.project : undefined),
       },
       location: {
+        default: () => ({ directory: options.defaultDirectory ?? DEAD_DEFAULT }),
         vcs: {
           info: () => (options.branch === undefined ? undefined : { branch: { current: options.branch } }),
         },
@@ -269,6 +282,7 @@ interface Mounted {
   readonly swim: (frames: number, ms?: number) => Promise<string>
   /** Switches the session the slot input points at, without remounting the claim. */
   readonly setSession: (sessionID: string) => void
+  readonly mouse: TestRendererSetup["mockMouse"]
   readonly close: () => Promise<void>
 }
 
@@ -282,6 +296,7 @@ async function mountClaim(
     project?: Project
     branch?: string
     client?: JokeClient
+    defaultDirectory?: string
     width?: number
     /** The renderer clipboard's answer; defaults to accepting every copy. */
     copyResult?: boolean | ((text: string) => boolean)
@@ -305,6 +320,7 @@ async function mountClaim(
     project: options.project,
     branch: options.branch,
     client: options.client,
+    defaultDirectory: options.defaultDirectory,
   })
   if (options.running === true) harness.statuses.set(SESSION, "running")
   await plugin.setup(harness.context)
@@ -352,6 +368,7 @@ async function mountClaim(
       return captured
     },
     setSession,
+    mouse: setup.mockMouse,
     close: async () => {
       await setup.dispose()
       restoreTimers()
@@ -813,6 +830,229 @@ describe("the duck.copy command", () => {
       expect(mounted.harness.toasts).toEqual([EMPTY_TOAST])
     } finally {
       await mounted.close()
+    }
+  })
+})
+
+describe("the duck.img command", () => {
+  const SAVED_TOAST = {
+    message: ">(o ) Screenshot saved",
+    variant: "success",
+    duration: 2000,
+  }
+  const FAILED_TOAST = {
+    message: ">(o ) Failed to save screenshot.",
+    variant: "error",
+    duration: 2000,
+  }
+  const NO_FRAME_TOAST = {
+    message: "<(o ) The duck isn't in frame yet.",
+    variant: "info",
+    duration: 2000,
+  }
+
+  const screenshotCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.id === "duck.img")!
+
+  /** The screenshots the plugin wrote under a temp project, sorted. */
+  function shots(directory: string): string[] {
+    const folder = join(directory, ".opencode", "ducksay", "screenshots")
+    return existsSync(folder) ? readdirSync(folder).sort() : []
+  }
+
+  /** A temp project whose session reports it as its working directory. */
+  function projectWithSession() {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-img-"))
+    return { directory, session: sessionInfo({ location: { directory } }) }
+  }
+
+  /** Ends a turn, waits for the fallback joke and the dock, returns the bubble. */
+  async function rest(mounted: Mounted): Promise<string> {
+    mounted.harness.emit("session.execution.succeeded", forSession)
+    await settle()
+    let last = ""
+    for (let step = 0; step < 120; step += 1) {
+      last = await mounted.swim(1, 200)
+      if (last.includes("Quack-quack!")) return last
+    }
+    throw new Error(`the duck.img test never reached a rest bubble:\n${last}`)
+  }
+
+  test("registers /duck.img without a default key or a palette entry", async () => {
+    const harness = fake()
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      const command = screenshotCommand(harness)
+      expect(command.title).toBe("Create a screenshot of the duck")
+      expect(command.bind).toBe(false)
+      expect(command.palette).toBeUndefined()
+      expect(command.slash).toEqual({ name: "duck.img" })
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("saves the displayed frame and reports success", async () => {
+    const project = projectWithSession()
+    const mounted = await mountClaim({ running: true, session: project.session })
+
+    try {
+      await rest(mounted)
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      const files = shots(project.directory)
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatch(/^ducksay-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.png$/)
+      const saved = readFileSync(join(project.directory, ".opencode", "ducksay", "screenshots", files[0]!))
+      expect([...saved.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+      expect(mounted.harness.toasts).toEqual([SAVED_TOAST])
+      expect(await mounted.frame()).toContain("✓")
+    } finally {
+      await mounted.close()
+      rmSync(project.directory, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * A session the host's cache does not carry has no working directory of its
+   * own, and the project's recorded path is not a place the reader is looking
+   * at. The screenshot belongs to the location the server calls default —
+   * `/repo`, where the fake project claims to live, must stay untouched.
+   */
+  test("falls back to the default location when the session names none", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-default-"))
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo({ location: undefined }),
+      defaultDirectory: directory,
+    })
+
+    try {
+      await rest(mounted)
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      expect(shots(directory)).toHaveLength(1)
+      expect(mounted.harness.toasts).toEqual([SAVED_TOAST])
+      expect(existsSync(join("/repo", ".opencode"))).toBe(false)
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("saves from the command while the duck is swimming", async () => {
+    const project = projectWithSession()
+    const mounted = await mountClaim({ running: true, session: project.session })
+
+    try {
+      // A few frames in the duck is on its way and nothing has been said yet.
+      const frame = await mounted.swim(3, 200)
+      expect(frame).toContain("__")
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      expect(shots(project.directory)).toHaveLength(1)
+      expect(mounted.harness.toasts).toEqual([SAVED_TOAST])
+      expect(await mounted.frame()).toContain("✓")
+    } finally {
+      await mounted.close()
+      rmSync(project.directory, { recursive: true, force: true })
+    }
+  })
+
+  test("saves the frame from a click on the icon", async () => {
+    const project = projectWithSession()
+    const mounted = await mountClaim({ running: true, session: project.session })
+
+    try {
+      const frame = await rest(mounted)
+      const column = frame.split("\n")[0]!.indexOf("[img]")
+      expect(column).toBeGreaterThanOrEqual(0)
+      await mounted.mouse.click(column, 0, 0)
+      await settle()
+
+      expect(shots(project.directory)).toHaveLength(1)
+      expect(mounted.harness.toasts).toEqual([SAVED_TOAST])
+    } finally {
+      await mounted.close()
+      rmSync(project.directory, { recursive: true, force: true })
+    }
+  })
+
+  test("reports a failed write and leaves the icon alone", async () => {
+    // A regular file where the project directory should be makes `mkdir` fail.
+    const file = join(mkdtempSync(join(tmpdir(), "ducksay-img-")), "not-a-directory")
+    writeFileSync(file, "")
+    const mounted = await mountClaim({ session: sessionInfo({ location: { directory: file } }) })
+
+    try {
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      expect(mounted.harness.toasts).toEqual([FAILED_TOAST])
+      const frame = await mounted.frame()
+      expect(frame).toContain("[img]")
+      expect(frame).not.toContain("✓")
+    } finally {
+      await mounted.close()
+      rmSync(file, { force: true })
+      rmSync(join(file, ".."), { recursive: true, force: true })
+    }
+  })
+
+  test("reports an empty command when no section is mounted", async () => {
+    const harness = fake()
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      screenshotCommand(harness).run()
+      expect(harness.toasts).toEqual([NO_FRAME_TOAST])
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("does not save another session's frame", async () => {
+    const project = projectWithSession()
+    const mounted = await mountClaim({ running: true, session: project.session })
+
+    try {
+      await rest(mounted)
+      // The route points at another session while the mounted section still
+      // shows its own: the command must refuse to photograph a tab it is not
+      // looking at.
+      mounted.harness.setRoute({ type: "session", sessionID: OTHER_SESSION })
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      expect(shots(project.directory)).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([NO_FRAME_TOAST])
+    } finally {
+      await mounted.close()
+      rmSync(project.directory, { recursive: true, force: true })
+    }
+  })
+
+  test("reports an empty command in a lane too narrow for the duck", async () => {
+    const project = projectWithSession()
+    const mounted = await mountClaim({ session: project.session, width: 5 })
+
+    try {
+      screenshotCommand(mounted.harness).run()
+      await settle()
+
+      expect(shots(project.directory)).toHaveLength(0)
+      expect(mounted.harness.toasts).toEqual([NO_FRAME_TOAST])
+    } finally {
+      await mounted.close()
+      rmSync(project.directory, { recursive: true, force: true })
     }
   })
 })

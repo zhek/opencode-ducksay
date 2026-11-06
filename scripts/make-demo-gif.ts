@@ -30,13 +30,21 @@ import {
   COMMAND_MENU_START,
   COMMAND_SEND_START,
   COPY_ICON,
+  IMG_ICON,
   LANE_COLS,
+  LANE_INSET,
   LOCALES,
   SCENARIOS,
+  SIDEBAR_BACKGROUND,
+  SIDEBAR_FONT,
+  SIDEBAR_LABEL,
+  SIDEBAR_LINE,
+  SIDEBAR_TEXT,
   SECOND_HOLD_START,
   TOTAL,
   copyIcon,
   frameState,
+  imgIcon,
   sidebarRows,
   type DemoScenario,
   type FrameState,
@@ -47,8 +55,10 @@ const W = 800
 const H = 450
 const DELAY = 80
 const SIZE = 12
-const SIDE_SIZE = 14
-const SIDE_LH = 19
+// The sidebar's own metrics live in `demo-layout.ts`, because the PNG card the
+// plugin saves copies them at double size and a test keeps the two in step.
+const SIDE_SIZE = SIDEBAR_FONT
+const SIDE_LH = SIDEBAR_LINE
 const SCALE = 2
 
 /** Use a monospace face with box-drawing-free art; the art itself is ASCII. */
@@ -87,7 +97,7 @@ const C = {
   bar: "#161b22",
   border: "#30363d",
   line: "#21262d",
-  text: "#e6edf3",
+  text: SIDEBAR_TEXT,
   muted: "#8b949e",
   dim: "#6e7681",
   accent: "#58a6ff",
@@ -111,7 +121,7 @@ const LANE_W = LANE_COLS * CHAR_SIDE
 const WINDOW = { x: 16, y: 14, w: 768, h: 422, r: 14 }
 const BODY_TOP = 48
 const SIDEBAR_X = W - 16 - 18 - (LANE_W + 28)
-const LANE_X = SIDEBAR_X + 14
+const LANE_X = SIDEBAR_X + LANE_INSET
 
 const ROW_HEAD = 162
 const ROW0 = 180
@@ -173,7 +183,7 @@ function drawBackground(demo: DemoScenario) {
   g.fillRect(WINDOW.x, WINDOW.y + 34, WINDOW.w, 1)
   g.restore()
 
-  g.fillStyle = "#0a0d13"
+  g.fillStyle = SIDEBAR_BACKGROUND
   g.fillRect(SIDEBAR_X, BODY_TOP, WINDOW.x + WINDOW.w - SIDEBAR_X, WINDOW.h - 34)
 
   g.strokeStyle = C.border
@@ -271,20 +281,26 @@ function drawCommandMenu() {
 
 function drawSectionLabel(label: string, y: number, primary = false) {
   // The plugin's own section title is `theme.text.base`; it is not accented.
-  text(sctx, label, LANE_X, y, primary ? C.text : C.muted, { size: 11, weight: 600 })
+  text(sctx, label, LANE_X, y, primary ? C.text : C.muted, { size: SIDEBAR_LABEL, weight: 600 })
 }
 
 /**
- * The copy icon at the right end of the `Ducksay` heading.
+ * The screenshot and copy icons at the right end of the `Ducksay` heading.
  *
- * The real section puts a six-cell icon box at the lane's right edge; this
- * right-aligns the glyph to the same edge. The icon is `theme.text.base` while
- * a finished joke can be copied and `theme.text.muted` while the duck is still
- * swimming or waiting, matching the plugin's `canCopy()`.
+ * The real section puts a five-cell `[img]` box left of a one-column gap and a
+ * six-cell `[copy]` box; this right-aligns both glyphs to the same edges. The
+ * screenshot icon is always `theme.text.base`; the copy icon is `theme.text.muted`
+ * while the duck is still swimming or waiting, matching `canCopy()`.
  */
-function drawHeadingCopy(state: FrameState) {
-  const color = copyIcon(state) === "active" ? C.text : C.muted
-  text(sctx, COPY_ICON, LANE_X + LANE_W - measure(COPY_ICON, 11), ROW_HEAD, color, { size: 11 })
+function drawHeadingIcons(state: FrameState) {
+  const copyWidth = measure(COPY_ICON, 11)
+  const copyColor = copyIcon(state) === "active" ? C.text : C.muted
+  text(sctx, COPY_ICON, LANE_X + LANE_W - copyWidth, ROW_HEAD, copyColor, { size: 11 })
+
+  const gap = measure(" ", 11)
+  const imgWidth = measure(IMG_ICON, 11)
+  const imgColor = imgIcon(state) === "active" ? C.text : C.muted
+  text(sctx, IMG_ICON, LANE_X + LANE_W - copyWidth - gap - imgWidth, ROW_HEAD, imgColor, { size: 11 })
 }
 
 function drawSidebar(state: FrameState, demo: DemoScenario) {
@@ -294,7 +310,7 @@ function drawSidebar(state: FrameState, demo: DemoScenario) {
   drawSectionLabel("MCP", 118)
   text(g, "no servers", LANE_X, 136, C.dim, { size: 10 })
   drawSectionLabel("Ducksay", ROW_HEAD, true)
-  drawHeadingCopy(state)
+  drawHeadingIcons(state)
 
   // The section takes one colour: the plugin paints every content row with the
   // theme's text colour, so there is no yellow duck, blue water or orange beak.

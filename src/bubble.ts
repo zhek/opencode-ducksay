@@ -11,6 +11,8 @@
  * about the duck, the renderer or Solid.
  */
 
+import { displayWidth, padToWidth, sliceToWidth } from "./width.ts"
+
 /** The frame's full width, borders and padding included. */
 export const BUBBLE_WIDTH = 29
 
@@ -45,6 +47,10 @@ export type BubbleSide = "left" | "right"
 /**
  * Wraps the message into lines no wider than the text field.
  *
+ * Width means terminal columns, not characters: an East Asian or emoji glyph
+ * counts as the two columns the terminal spends on it, so a joke mixing scripts
+ * still leaves the frame closed at both ends.
+ *
  * Words stay whole when they fit; a word longer than the field is cut into
  * chunks of the field's width, because there is no other way to show it. Only
  * the first `BUBBLE_MAX_LINES` lines survive, and the last one ends with an
@@ -56,7 +62,7 @@ export function wrapBubbleText(text: string): string[] {
   for (const word of words(text)) {
     for (const chunk of cut(word, BUBBLE_TEXT_WIDTH)) {
       const current = lines[lines.length - 1]
-      if (current !== undefined && current.length + 1 + chunk.length <= BUBBLE_TEXT_WIDTH) {
+      if (current !== undefined && displayWidth(current) + 1 + displayWidth(chunk) <= BUBBLE_TEXT_WIDTH) {
         lines[lines.length - 1] = current + " " + chunk
       } else {
         lines.push(chunk)
@@ -75,17 +81,25 @@ function words(text: string): string[] {
   return text.split(/\s+/).filter((word) => word !== "")
 }
 
-/** Cuts a word into pieces no wider than `width`. */
+/** Cuts a word into pieces no wider than `width` columns. */
 function cut(word: string, width: number): string[] {
-  if (word.length <= width) return [word]
+  if (displayWidth(word) <= width) return [word]
   const pieces: string[] = []
-  for (let at = 0; at < word.length; at += width) pieces.push(word.slice(at, at + width))
+  let rest = word
+  while (rest !== "") {
+    const piece = sliceToWidth(rest, width)
+    // A two-column glyph that will not fit the last column ends the piece one
+    // column short; take at least one character, or nothing would move.
+    const taken = piece === "" ? String.fromCodePoint(rest.codePointAt(0)!) : piece
+    pieces.push(taken)
+    rest = rest.slice(taken.length)
+  }
   return pieces
 }
 
 /** Replaces the tail of an overlong line with an ellipsis. */
 function withEllipsis(line: string): string {
-  return line.slice(0, BUBBLE_TEXT_WIDTH - 1) + "…"
+  return sliceToWidth(line, BUBBLE_TEXT_WIDTH - 1) + "…"
 }
 
 /**
@@ -115,9 +129,9 @@ export function bubbleRows(lines: readonly string[], side: BubbleSide): (string 
   return rows
 }
 
-/** One text line of the frame, padded out to the field's width. */
+/** One text line of the frame, padded out to the field's width in columns. */
 function textRow(line: string): string {
-  return "│ " + line.slice(0, BUBBLE_TEXT_WIDTH).padEnd(BUBBLE_TEXT_WIDTH, " ") + " │"
+  return "│ " + padToWidth(line, BUBBLE_TEXT_WIDTH) + " │"
 }
 
 /**
