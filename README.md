@@ -14,6 +14,11 @@ A tiny ASCII duck paddles around your OpenCode sidebar and drops funny remarks a
 
 Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters the session's context or transcript.
 
+## Screenshots
+
+Click `[img]` in the `Ducksay` heading, or run `/duck.img`, to save the duck's scene as a PNG. Pictures go to
+`.opencode/ducksay/screenshots/` in your project. The folder brings its own `.gitignore`, so they never reach git.
+
 ## Install
 
 Install the plugin with one command:

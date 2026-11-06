@@ -118,6 +118,27 @@ The same action is in the `/` list as `/duck.copy`, with no default keybind. If 
 Clipboard access uses the terminal's OSC 52 support. It works locally and over SSH, but some terminals ignore the request
 silently; the `✓` then only means the request was sent.
 
+## Screenshots
+
+The screenshot icon `[img]` sits in the `Ducksay` heading, one column left of `[copy]`. A left click saves the scene as it is
+at that moment — the bubble, the swimming duck, the water, the question marker or a cow cameo — as a PNG card titled
+`OpenCode Ducksay`. Unlike copying, it works in every state of the duck: while it swims, while a question waits, and with
+`silent: true`.
+
+The card carries its own font, so nothing on the reader's machine is needed: English, Russian and the rest of the Cyrillic
+a joke uses (Serbian `ј`, `љ`, `њ`, `ћ`, `џ`, Ukrainian `і`, `ї`, `є`, `ґ`), accented Latin, the bubble frame and the
+plugin's marks all print. A character the font genuinely lacks becomes a small hollow box rather than an error.
+
+Pictures go to `.opencode/ducksay/screenshots/` in the project as `ducksay-YYYY-MM-DD-HH-mm-ss.png`, in local time. If two
+pictures are taken in the same second, `-2`, `-3` and so on keep both. The folder comes with a `.gitignore` of its own
+holding one `*`, written the first time a picture is saved, so nothing lands in `git status`; a file already there is left
+alone, which is how you keep one picture in the repository — put your own rules in it and the plugin stops writing.
+
+A successful save shows `✓` in place of `[img]` for 1200 ms and a `>(o ) Screenshot saved` notice; clicking again restarts
+both and writes another file. If the file cannot be written, a `>(o ) Failed to save screenshot.` notice appears and the
+icon stays `[img]`. The same action is in the `/` list as `/duck.img`; with no section shown, a narrow sidebar or another
+session it only says `<(o ) The duck isn't in frame yet.` and writes nothing.
+
 ## The water
 
 The duck is in the water, not above it: the lower line of the drawing shares a row with the first line of the water, and a

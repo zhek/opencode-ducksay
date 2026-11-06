@@ -91,6 +91,19 @@ export const SCENARIOS: Record<Locale, DemoScenario> = {
 
 export const LOCALES: readonly Locale[] = ["en", "ru"]
 
+/**
+ * How the demo GIF lays the sidebar out: the scene's face and line, the section
+ * label above it, the inset the lane sits at, and the two colours the panel is
+ * painted with. The PNG card copies these numbers doubled, so
+ * `test/demo-gif.test.ts` can check the card and the GIF cannot drift apart.
+ */
+export const SIDEBAR_FONT = 14
+export const SIDEBAR_LINE = 19
+export const SIDEBAR_LABEL = 11
+export const LANE_INSET = 14
+export const SIDEBAR_BACKGROUND = "#0a0d13"
+export const SIDEBAR_TEXT = "#e6edf3"
+
 /** The narrowest lane that fits the bubble and the duck side by side. */
 export const LANE_COLS = BUBBLE_WIDTH + DUCK_WIDTH
 export const LIMIT = laneLimit(LANE_COLS, DUCK_WIDTH)
@@ -151,6 +164,9 @@ export interface FrameState {
 /** The copy glyph the section shows at the right end of its heading. */
 export const COPY_ICON = "[copy]"
 
+/** The screenshot glyph, one column to the left of the copy glyph. */
+export const IMG_ICON = "[img]"
+
 /**
  * Whether the heading's copy icon is lit for this frame.
  *
@@ -160,6 +176,16 @@ export const COPY_ICON = "[copy]"
  */
 export function copyIcon(state: FrameState): "active" | "muted" {
   return state.bubble !== null && state.speech === "ready" ? "active" : "muted"
+}
+
+/**
+ * Whether the heading's screenshot icon is lit.
+ *
+ * The plugin keeps `[img]` active in every state of the duck, so the demo shows
+ * it in the section's own colour from the first frame to the last.
+ */
+export function imgIcon(_state: FrameState): "active" {
+  return "active"
 }
 
 /**

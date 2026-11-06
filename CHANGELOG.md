@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A screenshot icon `[img]` in the `Ducksay` heading and `/duck.img` in the `/` list save the scene — bubble, swimming duck,
+  water, question marker, cow cameo — as a PNG card titled `OpenCode Ducksay`, in `.opencode/ducksay/screenshots/` as
+  `ducksay-YYYY-MM-DD-HH-mm-ss.png` (`-2`, `-3` for a second picture in the same second). The folder writes its own
+  `.gitignore`, so pictures stay out of git. The icon works in every state of the duck, including `silent: true`, shows `✓`
+  for 1200 ms, and a `Screenshot saved` notice follows. The card brings its own font — English, Russian and other Cyrillic,
+  accented Latin; a character it lacks becomes a small hollow box.
+
 ## [1.5.0] — 2026-11-04
 
 ### Added

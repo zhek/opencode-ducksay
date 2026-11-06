@@ -12,6 +12,17 @@ import { laneLimit } from "../src/lane.ts"
 import { THINKING_STEPS, beakOpen, bubbleWords, revealText, thinkingText } from "../src/thinking.ts"
 import { hasTilde as pluginHasTilde } from "../src/wave.ts"
 import {
+  CELL_HEIGHT,
+  CELL_WIDTH,
+  TITLE_WIDTH,
+} from "../src/screenshot-font.ts"
+import {
+  SCREENSHOT_BACKGROUND,
+  SCREENSHOT_INK,
+  SCREENSHOT_OUTLINE,
+  SCREENSHOT_PADDING,
+} from "../src/screenshot.ts"
+import {
   COMMAND_MENU_START,
   COMMAND_SELECT_START,
   COMMAND_SEND_START,
@@ -19,11 +30,18 @@ import {
   COPY_ICON,
   FIRST_HOLD_START,
   FIRST_TYPE_START,
+  IMG_ICON,
   LANE_COLS,
+  LANE_INSET,
   LIMIT,
   LOCALES,
   REST_START,
   SCENARIOS,
+  SIDEBAR_BACKGROUND,
+  SIDEBAR_FONT,
+  SIDEBAR_LABEL,
+  SIDEBAR_LINE,
+  SIDEBAR_TEXT,
   SECOND_HOLD_START,
   SECOND_TYPE_START,
   SECOND_WAIT_START,
@@ -34,6 +52,7 @@ import {
   copyIcon,
   frameState,
   hasTilde,
+  imgIcon,
   sidebarRows,
   waterVisible,
   type FrameState,
@@ -203,6 +222,20 @@ describe("demo copy icon", () => {
   })
 })
 
+describe("demo screenshot icon", () => {
+  test("shows the plugin's own label", () => {
+    expect(IMG_ICON).toBe("[img]")
+  })
+
+  test("stays lit in every demo frame, as the plugin keeps it active", () => {
+    for (const locale of LOCALES) {
+      for (const frame of [0, REST_START, SECOND_WAIT_START, TURN_END, TOTAL - 1]) {
+        expect(imgIcon(frameState(frame, locale)), `frame ${frame}`).toBe("active")
+      }
+    }
+  })
+})
+
 describe("demo scenarios", () => {
   test("ships a GIF for every README language", () => {
     expect(LOCALES).toEqual(["en", "ru"])
@@ -335,3 +368,22 @@ for (const { locale, first, second } of CASES) {
     })
   })
 }
+
+describe("the PNG card and the demo GIF", () => {
+  // The card the `[img]` button saves is the same picture the GIF draws in the
+  // sidebar, at double size. These hold the two to the same numbers: the card's
+  // cell is the GIF's line twice over, its margins and colours are the GIF's,
+  // and the heading is set at the section label's size, not the scene's.
+  // DejaVu Sans Mono is 0.602 em wide, which is where the cell widths come from.
+  const ADVANCE = 0.602
+
+  test("copies the GIF's sidebar metrics, doubled", () => {
+    expect(CELL_HEIGHT).toBe(SIDEBAR_LINE * 2)
+    expect(CELL_WIDTH).toBe(Math.round(SIDEBAR_FONT * 2 * ADVANCE))
+    expect(TITLE_WIDTH).toBe(Math.round(SIDEBAR_LABEL * 2 * ADVANCE))
+    expect(SCREENSHOT_PADDING).toBe(LANE_INSET * 2)
+    expect(SCREENSHOT_OUTLINE).toBe(2)
+    expect(SCREENSHOT_BACKGROUND).toBe(SIDEBAR_BACKGROUND)
+    expect(SCREENSHOT_INK).toBe(SIDEBAR_TEXT)
+  })
+})

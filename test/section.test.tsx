@@ -24,7 +24,7 @@ import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
-import { Ducksay, type DuckCommandResult, type DuckCopyResult, type DuckHandle, type DuckSprites } from "../src/tui.tsx"
+import { Ducksay, type DuckCommandResult, type DuckCopyResult, type DuckHandle, type DuckScreenshotResult, type DuckSprites } from "../src/tui.tsx"
 
 /** The session the mounted panel belongs to. */
 const SESSION = "ses_duck"
@@ -84,6 +84,7 @@ function facesRight(frame: string): boolean {
 
 const COPY_ICON = "[copy]"
 const COPY_DONE = "✓"
+const IMG_ICON = "[img]"
 const COPY_PREFIX = "( o)< "
 const COPY_SUFFIX = " (opencode-ducksay)"
 
@@ -163,6 +164,12 @@ interface Harness {
   readonly copies: readonly string[]
   /** Copy outcomes the section reported from the icon. */
   readonly notifies: readonly ("copied" | "failed")[]
+  /** Drives the section the way the palette screenshot command does. */
+  readonly screenshot: () => DuckScreenshotResult | undefined
+  /** Frames handed to the screenshot writer, in order. */
+  readonly screenshots: readonly { rows: readonly string[]; width: number }[]
+  /** Screenshot outcomes the section reported from the icon. */
+  readonly shotNotifies: readonly DuckScreenshotResult[]
   readonly mouse: TestRendererSetup["mockMouse"]
   /** Form events for the mounted session unless another session is passed. */
   readonly formCreated: (id: string, sessionID?: string) => void
@@ -201,6 +208,8 @@ interface MountOptions {
   joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
   /** Enables the copy icon; its return value is the clipboard's answer. */
   copy?: (text: string) => boolean
+  /** Enables the screenshot icon; its return value is the writer's answer. */
+  screenshot?: (frame: { rows: readonly string[]; width: number }) => DuckScreenshotResult
   /** Makes the 1/50 cow roll deterministic in a test. */
   random?: () => number
   sessionID?: string
@@ -234,6 +243,8 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
   let handle: DuckHandle | undefined
   const copies: string[] = []
   const notifies: ("copied" | "failed")[] = []
+  const screenshots: { rows: readonly string[]; width: number }[] = []
+  const shotNotifies: DuckScreenshotResult[] = []
 
   const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
   const removeForm = (id: string, sessionID: string) => {
@@ -319,6 +330,13 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
                     return options.copy!(text)
                   },
               notify: (result) => notifies.push(result),
+              screenshot: options.screenshot === undefined
+                ? undefined
+                : (frame) => {
+                    screenshots.push(frame)
+                    return options.screenshot!(frame)
+                  },
+              notifyScreenshot: (result) => shotNotifies.push(result),
               muted: MUTED,
               random: options.random,
               states: options.states,
@@ -363,6 +381,9 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     copy: () => handle?.copy(),
     copies,
     notifies,
+    screenshot: () => handle?.screenshot(),
+    screenshots,
+    shotNotifies,
     mouse: setup.mockMouse,
     formCreated,
     formReplied,
@@ -797,6 +818,214 @@ describe("copy icon", () => {
 
     await harness.unmount()
     expect(harness.activeTimers()).toBe(0)
+    await harness.dispose()
+  })
+})
+
+describe("screenshot icon", () => {
+  async function rest(options: MountOptions = {}) {
+    const harness = await mount({ running: true, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  /** The column the idle screenshot label occupies in the heading row. */
+  function shotColumn(frame: string): number {
+    const heading = frame.split("\n")[0] ?? ""
+    const column = heading.indexOf(IMG_ICON)
+    expect(column).toBeGreaterThanOrEqual(0)
+    return column
+  }
+
+  async function clickShot(harness: Harness, button: 0 | 2 = 0): Promise<void> {
+    const column = shotColumn(await harness.frame())
+    await harness.mouse.click(column, 0, button)
+  }
+
+  /** The scene rows as the screen shows them, clipped to the lane. */
+  function scene(frame: string, width = PANEL_WIDTH): string[] {
+    return frame.split("\n").slice(1, 10).map((row) => row.slice(0, width).trimEnd())
+  }
+
+  test("sits one column left of the copy icon without growing the section", async () => {
+    const harness = await mount({ copy: () => true, screenshot: () => "saved" })
+    const frame = await harness.frame()
+    await harness.dispose()
+    const heading = frame.split("\n")[0]!
+
+    expect(heading.indexOf("Ducksay")).toBe(0)
+    expect(heading.indexOf(IMG_ICON)).toBe(PANEL_WIDTH - 12)
+    expect(heading.indexOf(COPY_ICON)).toBe(PANEL_WIDTH - 6)
+    // Heading plus nine content rows is ten; the terminal frame is taller.
+    expect(frame.split("\n")[9]).toContain("~")
+    expect(frame.split("\n")[10]?.trim()).toBe("")
+  })
+
+  test("keeps both icons in place while either shows a check", async () => {
+    const { harness } = await rest({ copy: () => true, screenshot: () => "saved", bubbleText: "hi" })
+
+    const before = await harness.frame()
+    const copyAt = before.split("\n")[0]!.indexOf(COPY_ICON)
+    await clickShot(harness)
+    const afterShot = await harness.frame()
+    expect(afterShot).toContain(COPY_DONE)
+    expect(afterShot.split("\n")[0]!.indexOf(COPY_ICON)).toBe(copyAt)
+    const shotCheckAt = afterShot.split("\n")[0]!.indexOf(COPY_DONE)
+
+    // The copy icon's own confirmation must not move the screenshot icon: its
+    // check stays exactly where the screenshot left it.
+    await harness.mouse.click(copyAt, 0, 0)
+    const afterCopy = await harness.frame()
+    expect(afterCopy.split("\n")[0]!.indexOf(COPY_DONE)).toBe(shotCheckAt)
+    expect(afterCopy.split("\n")[0]!.indexOf(COPY_DONE, shotCheckAt + 1)).toBeGreaterThanOrEqual(copyAt)
+    await harness.dispose()
+  })
+
+  test("saves exactly the painted scene at rest", async () => {
+    const { harness, frame } = await rest({ screenshot: () => "saved", bubbleText: "Quack-quack!" })
+
+    expect(harness.screenshot()).toBe("saved")
+    expect(harness.screenshots).toHaveLength(1)
+    const shot = harness.screenshots[0]!
+    expect(shot.rows).toHaveLength(9)
+    expect(shot.width).toBe(PANEL_WIDTH)
+    expect(shot.rows.map((row) => row.slice(0, shot.width).trimEnd())).toEqual(scene(frame))
+    expect(shot.rows.join("\n")).toContain("Quack-quack!")
+    await harness.dispose()
+  })
+
+  test("saves the question marker and the swimming duck", async () => {
+    const swimming = await mount({ running: true, screenshot: () => "saved" })
+    swimming.formCreated("question-1")
+    const markerFrame = await swimming.advance(33)
+    expect(swimming.screenshot()).toBe("saved")
+    const markerShot = swimming.screenshots[0]!
+    expect(markerShot.rows.map((row) => row.slice(0, markerShot.width).trimEnd())).toEqual(
+      scene(markerFrame, markerShot.width),
+    )
+    expect(markerShot.rows.join("\n")).toMatch(/[?!⸮]/)
+    await swimming.dispose()
+  })
+
+  test("saves the cow when it is out", async () => {
+    const lane = PANEL_CONTENT_WIDTH
+    const limit = lane - DUCK_WIDTH
+    const harness = await mount({ running: true, width: lane, random: () => 0, screenshot: () => "saved" })
+    await harness.tick(limit + Math.ceil(limit / 2) + 1)
+    await harness.tick(15)
+
+    expect(harness.screenshot()).toBe("saved")
+    expect(harness.screenshots[0]!.rows.join("\n")).toContain("^__^")
+    await harness.dispose()
+  })
+
+  test("stays available under silent and disappears without a writer", async () => {
+    const silent = await mount({ silent: true, screenshot: () => "saved" })
+    const silentFrame = await silent.frame()
+    expect(silentFrame).toContain(IMG_ICON)
+    expect(silentFrame).not.toContain(COPY_ICON)
+    // With `[copy]` hidden, the gap goes with it and `[img]` is flush right.
+    expect(silentFrame.split("\n")[0]!.indexOf(IMG_ICON)).toBe(PANEL_WIDTH - IMG_ICON.length)
+    await clickShot(silent)
+    expect(silent.screenshots).toHaveLength(1)
+    expect(silent.shotNotifies).toEqual(["saved"])
+    await silent.dispose()
+
+    // Narrow lane: the icon is hidden with the copy icon.
+    const narrow = await mount({ width: 5, screenshot: () => "saved" })
+    expect(await narrow.frame()).not.toContain(IMG_ICON)
+    await narrow.dispose()
+
+    // No writer: tests and the demo render keep the old heading.
+    const plain = await mount()
+    expect(await plain.frame()).not.toContain(IMG_ICON)
+    await plain.dispose()
+  })
+
+  test("draws the icon in the theme colour and bolds it on hover", async () => {
+    const harness = await mount({ screenshot: () => "saved" })
+    const column = shotColumn(await harness.frame())
+    const span = () => {
+      for (const line of harness.spans().lines) {
+        for (const part of line.spans) {
+          if (part.text.includes(IMG_ICON)) return part
+        }
+      }
+      return undefined
+    }
+
+    const before = span()
+    expect(before).toBeDefined()
+    expect(before!.fg.equals(PRIMARY)).toBe(true)
+    expect(before!.attributes & 1).toBe(0)
+
+    await harness.mouse.moveTo(column, 0)
+    await harness.frame()
+    expect(span()!.attributes & 1).toBe(1)
+    await harness.dispose()
+  })
+
+  test("ignores the right button", async () => {
+    const harness = await mount({ screenshot: () => "saved" })
+    await clickShot(harness, 2)
+    const frame = await harness.frame()
+
+    expect(harness.screenshots).toHaveLength(0)
+    expect(harness.shotNotifies).toHaveLength(0)
+    expect(frame).not.toContain(COPY_DONE)
+    await harness.dispose()
+  })
+
+  test("shows a check for 1200 ms and restarts it on a second click", async () => {
+    const harness = await mount({ screenshot: () => "saved" })
+
+    await clickShot(harness)
+    expect(await harness.frame()).toContain(COPY_DONE)
+    expect(harness.shotNotifies).toEqual(["saved"])
+
+    expect(await harness.advance(600)).toContain(COPY_DONE)
+    expect(await harness.advance(600)).toContain(IMG_ICON)
+
+    // A second click while the check is up restarts the countdown.
+    const column = (await harness.frame()).split("\n")[0]!.indexOf(IMG_ICON)
+    await harness.mouse.click(column, 0, 0)
+    expect(await harness.frame()).toContain(COPY_DONE)
+    expect(await harness.advance(600)).toContain(COPY_DONE)
+    expect(await harness.advance(600)).toContain(IMG_ICON)
+    expect(harness.shotNotifies).toEqual(["saved", "saved"])
+    await harness.dispose()
+  })
+
+  test("resets the check when the session switches", async () => {
+    const harness = await mount({ screenshot: () => "saved" })
+    await clickShot(harness)
+    expect(await harness.frame()).toContain(COPY_DONE)
+
+    harness.setSession("ses_other")
+    const switched = await harness.frame()
+    expect(switched).toContain(IMG_ICON)
+    expect(switched).not.toContain(COPY_DONE)
+    await harness.dispose()
+  })
+
+  test("reports a failed write and leaves the label alone", async () => {
+    const harness = await mount({ screenshot: () => "failed" })
+    await clickShot(harness)
+    const frame = await harness.frame()
+
+    expect(harness.shotNotifies).toEqual(["failed"])
+    expect(frame).toContain(IMG_ICON)
+    expect(frame).not.toContain(COPY_DONE)
+    await harness.dispose()
+  })
+
+  test("does not touch the duck, the bubble or the water", async () => {
+    const { harness, frame } = await rest({ screenshot: () => "saved", bubbleText: "a joke" })
+    await clickShot(harness)
+    const after = await harness.frame()
+    expect(scene(after)).toEqual(scene(frame))
     await harness.dispose()
   })
 })
