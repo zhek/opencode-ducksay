@@ -1,3 +1,4 @@
+import type { ModelRef } from "@opencode/client"
 import type { PluginOptions } from "@opencode/plugin/options"
 
 /** Columns per second the duck swims at when the user sets nothing. */
@@ -100,6 +101,50 @@ export function resolveContextDepth(options: PluginOptions | undefined): number 
 function depthFrom(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return DEFAULT_CONTEXT_DEPTH
   return Math.min(value, MAX_CONTEXT_DEPTH)
+}
+
+/**
+ * What the joke request should do about the model.
+ *
+ * Three states, because two would hide a real distinction: no option means
+ * "keep the session's model", while a value that cannot be read as
+ * `provider/model` must silence the duck instead of quietly spending the
+ * session model against the user's intent.
+ */
+export type LlmModelChoice =
+  | { readonly kind: "session" }
+  | { readonly kind: "model"; readonly model: ModelRef }
+  | { readonly kind: "unusable" }
+
+/**
+ * Reads `llmModel` out of the plugin options.
+ *
+ * The value is one string, `"providerID/modelID"`, the shape OpenCode itself
+ * uses for model references in configuration:
+ *
+ * - no option, `null`, an empty or blank string, a number, a boolean or an
+ *   object → the session's model, exactly as before the option existed;
+ * - a string is trimmed at both edges, the first `/` separates the provider
+ *   from the model, and the rest is the model id as written, so an OpenRouter
+ *   suffix such as `:free` survives;
+ * - a non-blank string without `/`, with an empty provider or with an empty
+ *   model → an unusable model, which the section turns into `Quack-quack!`.
+ *
+ * Existence and access are the server's business: an unknown provider or a
+ * missing key fails the request and lands in the same fallback. No `variant`
+ * is filled, because the option is deliberately just a model name.
+ */
+export function resolveLlmModel(options: PluginOptions | undefined): LlmModelChoice {
+  const value = options?.llmModel
+  if (typeof value !== "string") return { kind: "session" }
+  const trimmed = value.trim()
+  if (trimmed === "") return { kind: "session" }
+  const slash = trimmed.indexOf("/")
+  if (slash <= 0 || slash === trimmed.length - 1) return { kind: "unusable" }
+  return {
+    kind: "model",
+    model: { providerID: trimmed.slice(0, slash), id: trimmed.slice(slash + 1) },
+  }
 }
 
 /**

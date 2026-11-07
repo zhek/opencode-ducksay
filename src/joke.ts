@@ -1,5 +1,6 @@
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { DuckExchange } from "./duck-state.ts"
+import type { LlmModelChoice } from "./options.ts"
 
 /**
  * The joke layer: it reads the recent session locally, turns it into one
@@ -70,6 +71,11 @@ export interface JokeGeneratorOptions {
   readonly source: () => JokeSource | undefined
   readonly depth: number
   readonly timeoutMs: number
+  /**
+   * The `llmModel` option: the session model when unset, the named model when
+   * set, or `unusable` when the value could not be read.
+   */
+  readonly model?: LlmModelChoice
   readonly timers?: JokeTimers
 }
 
@@ -299,7 +305,8 @@ function stripOuterQuotes(value: string): string {
  * is built before the timer starts, so `timeoutMs` covers only the model call.
  * A missing client, a missing `session.create`/`session.generate`/`session.remove`,
  * a thrown error, an empty answer or an aborted request all resolve to
- * `undefined`; there is no retry.
+ * `undefined`; there is no retry. A configured `llmModel` replaces the session
+ * model, and an unreadable one resolves to `undefined` before any call.
  */
 export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerator {
   const timers = options.timers ?? DEFAULT_TIMERS
@@ -320,6 +327,10 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
       return undefined
     }
     if (signal.aborted) return undefined
+    // A configured model that could not be read silences the duck straight
+    // away: no temporary session, no request, no spending of the session model
+    // the user asked to avoid.
+    if (options.model?.kind === "unusable") return undefined
 
     let source: JokeSource
     let prompt: string
@@ -341,9 +352,10 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
     let temporaryID: string | undefined
 
     try {
+      const model = options.model?.kind === "model" ? options.model.model : source.session?.model
       const created = await create.call(
         session,
-        { model: source.session?.model },
+        { model },
         { signal: controller.signal },
       )
       temporaryID = created?.id

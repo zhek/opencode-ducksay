@@ -2,8 +2,8 @@
 
 [Русская версия](configuration.ru.md)
 
-`opencode-ducksay` has four options: `swimSpeed`, `silent`, `llmTimeout` and `llmContextDepth`. All are optional, and
-each section below lists what happens when it is not set.
+`opencode-ducksay` has five options: `swimSpeed`, `silent`, `llmTimeout`, `llmContextDepth` and `llmModel`. All are
+optional, and each section below lists what happens when it is not set.
 
 See [how the duck behaves](behavior.md) for the animation, jokes, questions and the water.
 
@@ -107,6 +107,32 @@ How many recent messages of each role go into the joke prompt: user messages and
 | a number written as a string, `"3"` | Read as the same number |
 | a value above `10` | Capped at `10` |
 | `0`, a negative number, a fraction, a blank value or anything that is not a number | Falls back to `2` |
+
+## `llmModel`
+
+Which model writes the duck's jokes. Without the option a joke goes to the model selected in the session, which can be an
+expensive one for a single short line. Naming a free or cheap model here keeps the session's model for real work.
+
+The value is a model name in the form `"provider/model"`, the same shape OpenCode uses for model references elsewhere.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "llmModel": "opencode/big-pickle" } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | The model selected in the session; the server's default model when the session has none |
+| `"opencode/big-pickle"` | Jokes are written by `big-pickle`, the free model of the `opencode` provider |
+| spaces around the value | Ignored |
+| a name with a colon, `"openrouter/deepseek-v3:free"` | Everything after the first `/` is the model name, so the suffix is kept |
+| an empty value or something that is not a string | Treated as not set |
+| a non-empty value without a provider, such as `"haiku"` | The value is unusable: the bubble says `Quack-quack!` |
+| the server cannot find or reach the model | The bubble says `Quack-quack!`, with no notice and no retry until the next turn |
+
+A model named here is used only for the joke; the session keeps its own. The request still goes to a temporary session, so
+nothing is added to the session's transcript. Leaving the option out changes nothing compared with earlier versions.
 
 Variable substitution does **not** apply to `cli.json`: `"{env:DUCK_SPEED}"` reaches the plugin as that literal text, which
 is not a number, so the default is used. To keep a value in one place, put it in the file rather than referencing a

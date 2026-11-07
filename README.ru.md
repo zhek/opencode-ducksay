@@ -19,6 +19,19 @@
 Нажмите `[img]` в заголовке `Ducksay` или выполните `/duck.img` — сцена с уточкой сохранится в PNG. Файлы лежат в
 `.opencode/ducksay/screenshots/` проекта. Папка приносит свой `.gitignore`, поэтому в git они не попадут.
 
+## Выбор модели
+
+Уточка шутит той же моделью, что и ваша сессия. Если она платная, для шуток можно указать другую:
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "llmModel": "opencode/big-pickle" } }]
+}
+```
+
+В `llmModel` пишется модель в форме `"провайдер/модель"`. Сессия остаётся на своей модели. Если указанной модели нет,
+уточка ответит `Quack-quack!` вместо шутки.
+
 ## Установка
 
 Установите плагин одной командой:
@@ -37,7 +50,7 @@ opencode plugin add opencode-ducksay
 - [Как ведёт себя уточка](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.ru.md) — плавание, шутки,
   вопросы, разговор с уточкой и вода.
 - [Конфигурация и опции](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.ru.md) — `swimSpeed`,
-  `silent`, `llmTimeout`, `llmContextDepth` и настройки боковой панели.
+  `silent`, `llmTimeout`, `llmContextDepth`, `llmModel` и настройки боковой панели.
 
 ## Лицензия
 

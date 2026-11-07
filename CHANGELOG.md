@@ -10,6 +10,10 @@
   `.gitignore`, so pictures stay out of git. The icon works in every state of the duck, including `silent: true`, shows `✓`
   for 1200 ms, and a `Screenshot saved` notice follows. The card brings its own font — English, Russian and other Cyrillic,
   accented Latin — and a character it lacks becomes a box of the right width, so lines keep their shape.
+- `llmModel` points the duck's jokes at one model, such as a free one, so the session's model is no longer spent on them.
+  Values are written as `"provider/model"`, for example `opencode/big-pickle`. Without the option nothing changes: jokes
+  keep using the session's model, or the server's default when the session has none. A model the server cannot use ends
+  in the usual `Quack-quack!`, with no notice and no retry until the next turn.
 
 ### Fixed
 
