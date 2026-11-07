@@ -14,6 +14,9 @@
   Values are written as `"provider/model"`, for example `opencode/big-pickle`. Without the option nothing changes: jokes
   keep using the session's model, or the server's default when the session has none. A model the server cannot use ends
   in the usual `Quack-quack!`, with no notice and no retry until the next turn.
+- Warnings and errors now go to a diagnostic log in `.opencode/ducksay/logs/`: why a joke fell back to `Quack-quack!`, why
+  a screenshot or a copy failed, and which option value was ignored. The log is JSON Lines in local time, keeps at most
+  seven 1 MiB files named `ducksay-YYYY-MM-DD-N.log`, and the folder hides itself from git. No setting is needed.
 
 ### Fixed
 

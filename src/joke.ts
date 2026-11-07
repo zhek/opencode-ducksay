@@ -76,8 +76,39 @@ export interface JokeGeneratorOptions {
    * set, or `unusable` when the value could not be read.
    */
   readonly model?: LlmModelChoice
+  /** The raw `llmModel` value, for the `joke.model_unusable` line. */
+  readonly modelName?: string
+  /** Reports why a request produced no joke; the logger owns the file. */
+  readonly onFailure?: (failure: JokeFailure) => void
   readonly timers?: JokeTimers
 }
+
+/** Why a request was cancelled before it could finish. */
+export type JokeAbortReason = "turn" | "unmount"
+
+/** Every path that resolves to `undefined`, in the logger's terms. */
+export type JokeFailure =
+  | { readonly kind: "client_missing" }
+  | { readonly kind: "source_missing" }
+  | { readonly kind: "prompt_failed"; readonly error: unknown }
+  | { readonly kind: "model_unusable"; readonly model: string }
+  | { readonly kind: "session_create_failed"; readonly model: string | null; readonly error: unknown }
+  | { readonly kind: "session_create_empty"; readonly model: string | null }
+  | {
+      readonly kind: "request_failed"
+      readonly model: string | null
+      readonly durationMs: number
+      readonly error: unknown
+    }
+  | {
+      readonly kind: "timeout"
+      readonly model: string | null
+      readonly timeoutMs: number
+      readonly durationMs: number
+    }
+  | { readonly kind: "empty_answer"; readonly durationMs: number; readonly rawLength: number }
+  | { readonly kind: "cleanup_failed"; readonly temporaryID: string; readonly error: unknown }
+  | { readonly kind: "aborted"; readonly reason: JokeAbortReason }
 
 /** What the section adds when the user spoke to the duck directly. */
 export interface JokeInput {
@@ -94,7 +125,7 @@ export type JokeGenerator = (
 
 export interface JokeRequest {
   readonly result: Promise<string | undefined>
-  cancel(): void
+  cancel(reason?: JokeAbortReason): void
 }
 
 const DEFAULT_TIMERS: JokeTimers = {
@@ -305,11 +336,21 @@ function stripOuterQuotes(value: string): string {
  * is built before the timer starts, so `timeoutMs` covers only the model call.
  * A missing client, a missing `session.create`/`session.generate`/`session.remove`,
  * a thrown error, an empty answer or an aborted request all resolve to
- * `undefined`; there is no retry. A configured `llmModel` replaces the session
+ * `undefined`; there is no retry. Each of those paths also reports a
+ * `JokeFailure`, so the caller can explain the fallback without this module
+ * knowing anything about files. A configured `llmModel` replaces the session
  * model, and an unreadable one resolves to `undefined` before any call.
  */
 export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerator {
   const timers = options.timers ?? DEFAULT_TIMERS
+  const report = (failure: JokeFailure) => {
+    try {
+      options.onFailure?.(failure)
+    } catch {
+      // A diagnostic callback must never change what the duck says.
+    }
+  }
+
   return async (signal, input) => {
     const session = options.client?.session
     const create = session?.create
@@ -324,44 +365,66 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
       typeof generate !== "function" ||
       typeof remove !== "function"
     ) {
+      report({ kind: "client_missing" })
       return undefined
     }
-    if (signal.aborted) return undefined
+    if (signal.aborted) {
+      report({ kind: "aborted", reason: abortReason(signal) })
+      return undefined
+    }
     // A configured model that could not be read silences the duck straight
     // away: no temporary session, no request, no spending of the session model
     // the user asked to avoid.
-    if (options.model?.kind === "unusable") return undefined
+    if (options.model?.kind === "unusable") {
+      report({ kind: "model_unusable", model: options.modelName ?? "" })
+      return undefined
+    }
 
     let source: JokeSource
     let prompt: string
     try {
       const read = options.source()
-      if (read === undefined) return undefined
+      if (read === undefined) {
+        report({ kind: "source_missing" })
+        return undefined
+      }
       source = read
       prompt = buildJokePrompt(collectJokeContext(source, options.depth), input)
-    } catch {
+    } catch (error) {
+      report({ kind: "prompt_failed", error })
       return undefined
     }
 
     const controller = new AbortController()
-    const forwardAbort = () => controller.abort()
+    const forwardAbort = () => controller.abort(signal.reason)
     signal.addEventListener("abort", forwardAbort, { once: true })
     let timer: unknown
     let timerArmed = false
     let timedOut = false
     let temporaryID: string | undefined
+    let phase: "create" | "generate" = "create"
+    let model: ModelRef | undefined
+    const startedAt = Date.now()
 
     try {
-      const model = options.model?.kind === "model" ? options.model.model : source.session?.model
+      model = options.model?.kind === "model" ? options.model.model : source.session?.model
       const created = await create.call(
         session,
         { model },
         { signal: controller.signal },
       )
       temporaryID = created?.id
-      if (temporaryID === undefined || temporaryID === "") return undefined
-      if (signal.aborted || controller.signal.aborted) return undefined
+      if (temporaryID === undefined || temporaryID === "") {
+        temporaryID = undefined
+        report({ kind: "session_create_empty", model: modelLabel(model) })
+        return undefined
+      }
+      if (signal.aborted || controller.signal.aborted) {
+        report({ kind: "aborted", reason: abortReason(signal) })
+        return undefined
+      }
 
+      phase = "generate"
       timer = timers.set(() => {
         timedOut = true
         controller.abort()
@@ -373,9 +436,33 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
         { sessionID: temporaryID, prompt },
         { signal: controller.signal },
       )
-      if (timedOut || signal.aborted || controller.signal.aborted) return undefined
-      return cleanJoke(result?.text ?? "")
-    } catch {
+      const durationMs = Date.now() - startedAt
+      if (timedOut) {
+        report({ kind: "timeout", model: modelLabel(model), timeoutMs: options.timeoutMs, durationMs })
+        return undefined
+      }
+      if (signal.aborted || controller.signal.aborted) {
+        report({ kind: "aborted", reason: abortReason(signal) })
+        return undefined
+      }
+      const raw = result?.text ?? ""
+      const cleaned = cleanJoke(raw)
+      if (cleaned === undefined) {
+        report({ kind: "empty_answer", durationMs, rawLength: raw.length })
+        return undefined
+      }
+      return cleaned
+    } catch (error) {
+      const durationMs = Date.now() - startedAt
+      if (timedOut) {
+        report({ kind: "timeout", model: modelLabel(model), timeoutMs: options.timeoutMs, durationMs })
+      } else if (signal.aborted) {
+        report({ kind: "aborted", reason: abortReason(signal) })
+      } else if (phase === "create") {
+        report({ kind: "session_create_failed", model: modelLabel(model), error })
+      } else {
+        report({ kind: "request_failed", model: modelLabel(model), durationMs, error })
+      }
       return undefined
     } finally {
       if (timerArmed) timers.clear(timer)
@@ -383,12 +470,21 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
       if (temporaryID !== undefined) {
         try {
           await remove.call(session, { sessionID: temporaryID })
-        } catch {
+        } catch (error) {
           // The temporary session is already gone or removal is not possible; the joke still resolves.
+          report({ kind: "cleanup_failed", temporaryID, error })
         }
       }
     }
   }
+}
+
+function abortReason(signal: AbortSignal): JokeAbortReason {
+  return signal.reason === "unmount" ? "unmount" : "turn"
+}
+
+function modelLabel(model: ModelRef | undefined): string | null {
+  return model === undefined ? null : `${model.providerID}/${model.id}`
 }
 
 /**
@@ -401,7 +497,6 @@ export function createJokeRequest(generate: JokeGenerator, input?: JokeInput): J
   let cancelled = false
 
   const result = (async () => {
-    if (controller.signal.aborted) return undefined
     try {
       const text = await generate(controller.signal, input)
       return cancelled ? undefined : text
@@ -412,10 +507,10 @@ export function createJokeRequest(generate: JokeGenerator, input?: JokeInput): J
 
   return {
     result,
-    cancel() {
+    cancel(reason = "turn") {
       if (cancelled) return
       cancelled = true
-      controller.abort()
+      controller.abort(reason)
     },
   }
 }

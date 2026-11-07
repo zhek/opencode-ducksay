@@ -6,6 +6,7 @@ import {
   MAX_CONTEXT_DEPTH,
   MAX_LLM_TIMEOUT_MS,
   MAX_SWIM_SPEED,
+  diagnoseOptions,
   resolveContextDepth,
   resolveLlmModel,
   resolveLlmTimeout,
@@ -263,5 +264,120 @@ describe("resolveSilent", () => {
     expect(resolveSilent({ silent: 0 })).toBe(false)
     expect(resolveSilent({ silent: "yes" })).toBe(false)
     expect(resolveSilent({ silent: {} })).toBe(false)
+  })
+})
+describe("diagnoseOptions", () => {
+  test("reports nothing for unset, null and valid values", () => {
+    expect(diagnoseOptions(undefined)).toEqual([])
+    expect(diagnoseOptions({})).toEqual([])
+    expect(diagnoseOptions({ swimSpeed: 24, llmTimeout: 10, llmContextDepth: 3, llmModel: "opencode/big-pickle" })).toEqual([])
+    expect(diagnoseOptions({ swimSpeed: null, llmTimeout: null, llmContextDepth: null, llmModel: null })).toEqual([])
+  })
+
+  test("reports a swimSpeed fallback and a cap with exact values", () => {
+    expect(diagnoseOptions({ swimSpeed: -5 })).toEqual([
+      {
+        option: "swimSpeed",
+        value: -5,
+        effective: 10,
+        reason: "fallback",
+        message: "The swimSpeed option is invalid.",
+      },
+    ])
+    expect(diagnoseOptions({ swimSpeed: 500 })).toEqual([
+      {
+        option: "swimSpeed",
+        value: 500,
+        effective: 120,
+        reason: "capped",
+        message: "The swimSpeed option was capped.",
+      },
+    ])
+  })
+
+  test("reports a blank string as a fallback with the raw value", () => {
+    expect(diagnoseOptions({ swimSpeed: "  " })).toEqual([
+      {
+        option: "swimSpeed",
+        value: "  ",
+        effective: 10,
+        reason: "fallback",
+        message: "The swimSpeed option is invalid.",
+      },
+    ])
+  })
+
+  test("reports llmTimeout fallback and cap in milliseconds", () => {
+    expect(diagnoseOptions({ llmTimeout: 0 })).toEqual([
+      {
+        option: "llmTimeout",
+        value: 0,
+        effective: 60000,
+        reason: "fallback",
+        message: "The llmTimeout option is invalid.",
+      },
+    ])
+    expect(diagnoseOptions({ llmTimeout: 500 })).toEqual([
+      {
+        option: "llmTimeout",
+        value: 500,
+        effective: 120000,
+        reason: "capped",
+        message: "The llmTimeout option was capped.",
+      },
+    ])
+  })
+
+  test("reports llmContextDepth fallback and cap", () => {
+    expect(diagnoseOptions({ llmContextDepth: 0 })).toEqual([
+      {
+        option: "llmContextDepth",
+        value: 0,
+        effective: 2,
+        reason: "fallback",
+        message: "The llmContextDepth option is invalid.",
+      },
+    ])
+    expect(diagnoseOptions({ llmContextDepth: 50 })).toEqual([
+      {
+        option: "llmContextDepth",
+        value: 50,
+        effective: 10,
+        reason: "capped",
+        message: "The llmContextDepth option was capped.",
+      },
+    ])
+  })
+
+  test("reports an unusable llmModel with the raw value", () => {
+    expect(diagnoseOptions({ llmModel: "haiku" })).toEqual([
+      {
+        option: "llmModel",
+        value: "haiku",
+        effective: null,
+        reason: "unusable",
+        message: "The llmModel option is not a usable provider/model reference.",
+      },
+    ])
+  })
+
+  test("reports every invalid option at once", () => {
+    const diagnostics = diagnoseOptions({
+      swimSpeed: -1,
+      llmTimeout: 0,
+      llmContextDepth: 99,
+      llmModel: "haiku",
+    })
+
+    expect(diagnostics.map((diagnostic) => diagnostic.option)).toEqual([
+      "swimSpeed",
+      "llmTimeout",
+      "llmContextDepth",
+      "llmModel",
+    ])
+  })
+
+  test("does not diagnose silent", () => {
+    expect(diagnoseOptions({ silent: "maybe" })).toEqual([])
   })
 })

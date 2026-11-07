@@ -7,6 +7,38 @@ export const DEFAULT_SWIM_SPEED = 10
 /** Above this the duck crosses the lane faster than it can be read. */
 export const MAX_SWIM_SPEED = 120
 
+/** How long the duck waits for the joke before falling back, in milliseconds. */
+export const DEFAULT_LLM_TIMEOUT_MS = 60_000
+
+/** Above this the user waits too long for a resting duck to say anything. */
+export const MAX_LLM_TIMEOUT_MS = 120_000
+
+/** How many recent messages of each role the joke is built from by default. */
+export const DEFAULT_CONTEXT_DEPTH = 2
+
+/** Above this the prompt grows faster than it buys a better joke. */
+export const MAX_CONTEXT_DEPTH = 10
+
+/** The options whose invalid values are reported in the log. */
+export type ConfigOption = "swimSpeed" | "llmTimeout" | "llmContextDepth" | "llmModel"
+
+/** Why a value was not used as written. */
+export type ConfigReason = "fallback" | "capped" | "unusable"
+
+/** One `config.invalid` line, with the exact message the log carries. */
+export interface ConfigDiagnostic {
+  readonly option: ConfigOption
+  readonly value: unknown
+  readonly effective: number | null
+  readonly reason: ConfigReason
+  readonly message: string
+}
+
+interface Reading<T> {
+  readonly value: T
+  readonly diagnostic?: ConfigDiagnostic
+}
+
 /**
  * Reads `swimSpeed` out of the plugin options and turns it into a speed.
  *
@@ -24,30 +56,31 @@ export const MAX_SWIM_SPEED = 120
  *   default, because a typo must not silently switch the feature off.
  */
 export function resolveSwimSpeed(options: PluginOptions | undefined): number {
-  const value = options?.swimSpeed
-  if (typeof value === "string") {
-    const trimmed = value.trim()
-    return trimmed === "" ? DEFAULT_SWIM_SPEED : clamp(Number(trimmed))
+  return readSwimSpeed(options).value
+}
+
+function readSwimSpeed(options: PluginOptions | undefined): Reading<number> {
+  const raw = options?.swimSpeed
+  if (raw === undefined || raw === null) return { value: DEFAULT_SWIM_SPEED }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed === "") {
+      return { value: DEFAULT_SWIM_SPEED, diagnostic: numericDiagnostic("swimSpeed", raw, DEFAULT_SWIM_SPEED, "fallback") }
+    }
+    return swimSpeedFrom(Number(trimmed), raw)
   }
-  return clamp(value)
+  return swimSpeedFrom(raw, raw)
 }
 
-function clamp(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return DEFAULT_SWIM_SPEED
-  return Math.min(value, MAX_SWIM_SPEED)
+function swimSpeedFrom(value: unknown, raw: unknown): Reading<number> {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return { value: DEFAULT_SWIM_SPEED, diagnostic: numericDiagnostic("swimSpeed", raw, DEFAULT_SWIM_SPEED, "fallback") }
+  }
+  if (value > MAX_SWIM_SPEED) {
+    return { value: MAX_SWIM_SPEED, diagnostic: numericDiagnostic("swimSpeed", raw, MAX_SWIM_SPEED, "capped") }
+  }
+  return { value }
 }
-
-/** How long the duck waits for the joke before falling back, in milliseconds. */
-export const DEFAULT_LLM_TIMEOUT_MS = 60_000
-
-/** Above this the user waits too long for a resting duck to say anything. */
-export const MAX_LLM_TIMEOUT_MS = 120_000
-
-/** How many recent messages of each role the joke is built from by default. */
-export const DEFAULT_CONTEXT_DEPTH = 2
-
-/** Above this the prompt grows faster than it buys a better joke. */
-export const MAX_CONTEXT_DEPTH = 10
 
 /**
  * Reads `llmTimeout` out of the plugin options and turns it into milliseconds.
@@ -64,18 +97,37 @@ export const MAX_CONTEXT_DEPTH = 10
  * fallback, and the default makes that state impossible to reach by accident.
  */
 export function resolveLlmTimeout(options: PluginOptions | undefined): number {
-  const value = options?.llmTimeout
-  if (typeof value === "string") {
-    const trimmed = value.trim()
-    if (trimmed === "") return DEFAULT_LLM_TIMEOUT_MS
-    return timeoutFrom(Number(trimmed))
-  }
-  return timeoutFrom(value)
+  return readLlmTimeout(options).value
 }
 
-function timeoutFrom(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_LLM_TIMEOUT_MS
-  return Math.min(value * 1000, MAX_LLM_TIMEOUT_MS)
+function readLlmTimeout(options: PluginOptions | undefined): Reading<number> {
+  const raw = options?.llmTimeout
+  if (raw === undefined || raw === null) return { value: DEFAULT_LLM_TIMEOUT_MS }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed === "") {
+      return {
+        value: DEFAULT_LLM_TIMEOUT_MS,
+        diagnostic: numericDiagnostic("llmTimeout", raw, DEFAULT_LLM_TIMEOUT_MS, "fallback"),
+      }
+    }
+    return timeoutFrom(Number(trimmed), raw)
+  }
+  return timeoutFrom(raw, raw)
+}
+
+function timeoutFrom(value: unknown, raw: unknown): Reading<number> {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return {
+      value: DEFAULT_LLM_TIMEOUT_MS,
+      diagnostic: numericDiagnostic("llmTimeout", raw, DEFAULT_LLM_TIMEOUT_MS, "fallback"),
+    }
+  }
+  const milliseconds = value * 1000
+  if (milliseconds > MAX_LLM_TIMEOUT_MS) {
+    return { value: MAX_LLM_TIMEOUT_MS, diagnostic: numericDiagnostic("llmTimeout", raw, MAX_LLM_TIMEOUT_MS, "capped") }
+  }
+  return { value: milliseconds }
 }
 
 /**
@@ -89,18 +141,39 @@ function timeoutFrom(value: unknown): number {
  * string, a boolean, an object — falls back to the default.
  */
 export function resolveContextDepth(options: PluginOptions | undefined): number {
-  const value = options?.llmContextDepth
-  if (typeof value === "string") {
-    const trimmed = value.trim()
-    if (trimmed === "") return DEFAULT_CONTEXT_DEPTH
-    return depthFrom(Number(trimmed))
-  }
-  return depthFrom(value)
+  return readContextDepth(options).value
 }
 
-function depthFrom(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return DEFAULT_CONTEXT_DEPTH
-  return Math.min(value, MAX_CONTEXT_DEPTH)
+function readContextDepth(options: PluginOptions | undefined): Reading<number> {
+  const raw = options?.llmContextDepth
+  if (raw === undefined || raw === null) return { value: DEFAULT_CONTEXT_DEPTH }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed === "") {
+      return {
+        value: DEFAULT_CONTEXT_DEPTH,
+        diagnostic: numericDiagnostic("llmContextDepth", raw, DEFAULT_CONTEXT_DEPTH, "fallback"),
+      }
+    }
+    return depthFrom(Number(trimmed), raw)
+  }
+  return depthFrom(raw, raw)
+}
+
+function depthFrom(value: unknown, raw: unknown): Reading<number> {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    return {
+      value: DEFAULT_CONTEXT_DEPTH,
+      diagnostic: numericDiagnostic("llmContextDepth", raw, DEFAULT_CONTEXT_DEPTH, "fallback"),
+    }
+  }
+  if (value > MAX_CONTEXT_DEPTH) {
+    return {
+      value: MAX_CONTEXT_DEPTH,
+      diagnostic: numericDiagnostic("llmContextDepth", raw, MAX_CONTEXT_DEPTH, "capped"),
+    }
+  }
+  return { value }
 }
 
 /**
@@ -135,15 +208,32 @@ export type LlmModelChoice =
  * is filled, because the option is deliberately just a model name.
  */
 export function resolveLlmModel(options: PluginOptions | undefined): LlmModelChoice {
-  const value = options?.llmModel
-  if (typeof value !== "string") return { kind: "session" }
-  const trimmed = value.trim()
-  if (trimmed === "") return { kind: "session" }
+  return readLlmModel(options).value
+}
+
+function readLlmModel(options: PluginOptions | undefined): Reading<LlmModelChoice> {
+  const raw = options?.llmModel
+  if (typeof raw !== "string") return { value: { kind: "session" } }
+  const trimmed = raw.trim()
+  if (trimmed === "") return { value: { kind: "session" } }
   const slash = trimmed.indexOf("/")
-  if (slash <= 0 || slash === trimmed.length - 1) return { kind: "unusable" }
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return {
+      value: { kind: "unusable" },
+      diagnostic: {
+        option: "llmModel",
+        value: raw,
+        effective: null,
+        reason: "unusable",
+        message: "The llmModel option is not a usable provider/model reference.",
+      },
+    }
+  }
   return {
-    kind: "model",
-    model: { providerID: trimmed.slice(0, slash), id: trimmed.slice(slash + 1) },
+    value: {
+      kind: "model",
+      model: { providerID: trimmed.slice(0, slash), id: trimmed.slice(slash + 1) },
+    },
   }
 }
 
@@ -160,4 +250,32 @@ export function resolveSilent(options: PluginOptions | undefined): boolean {
   if (typeof value === "boolean") return value
   if (typeof value === "string") return value.trim().toLowerCase() === "true"
   return false
+}
+
+/** One diagnostic per option whose value was not used as written. */
+export function diagnoseOptions(options: PluginOptions | undefined): ConfigDiagnostic[] {
+  const readings = [
+    readSwimSpeed(options),
+    readLlmTimeout(options),
+    readContextDepth(options),
+    readLlmModel(options),
+  ]
+  return readings.flatMap((reading) => (reading.diagnostic === undefined ? [] : [reading.diagnostic]))
+}
+
+function numericDiagnostic(
+  option: "swimSpeed" | "llmTimeout" | "llmContextDepth",
+  value: unknown,
+  effective: number,
+  reason: "fallback" | "capped",
+): ConfigDiagnostic {
+  return {
+    option,
+    value,
+    effective,
+    reason,
+    message: reason === "fallback"
+      ? `The ${option} option is invalid.`
+      : `The ${option} option was capped.`,
+  }
 }
