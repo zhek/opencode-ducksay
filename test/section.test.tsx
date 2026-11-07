@@ -1078,6 +1078,47 @@ describe("swimming", () => {
     expect(columnOf(await harness.tick(5))).toBe(dockedColumn)
   })
 
+  test("a late busy status does not undo a finished turn", async () => {
+    const harness = await mount({ running: true })
+    expect(columnOf(await harness.advance(COLUMN_MS * 5))).toBeGreaterThan(0)
+
+    // The completion is newer than the status: the host delivered the status
+    // late, after the turn had already ended.
+    harness.emit("session.execution.succeeded", { data: { sessionID: SESSION }, created: 200 })
+    harness.emit("session.status", {
+      data: { sessionID: SESSION, status: { type: "busy" } },
+      created: 100,
+    })
+
+    const docked = await harness.tick(RIGHT_EDGE + 2)
+    const dockedColumn = columnOf(docked)
+    expect([0, RIGHT_EDGE]).toContain(dockedColumn)
+    expect(columnOf(await harness.tick(5))).toBe(dockedColumn)
+  })
+
+  test("a late start does not undo a finished turn", async () => {
+    const harness = await mount({ running: true })
+    expect(columnOf(await harness.advance(COLUMN_MS * 5))).toBeGreaterThan(0)
+
+    harness.emit("session.execution.succeeded", { data: { sessionID: SESSION }, created: 200 })
+    harness.emit("session.execution.started", { data: { sessionID: SESSION }, created: 100 })
+
+    const docked = await harness.tick(RIGHT_EDGE + 2)
+    const dockedColumn = columnOf(docked)
+    expect([0, RIGHT_EDGE]).toContain(dockedColumn)
+  })
+
+  test("a late idle does not stop a newer turn", async () => {
+    const harness = await mount({ running: false })
+    harness.emit("session.execution.started", { data: { sessionID: SESSION }, created: 200 })
+    harness.emit("session.idle", { data: { sessionID: SESSION }, created: 100 })
+
+    const start = columnOf(await harness.frame())
+    const later = columnOf(await harness.advance(COLUMN_MS * 5))
+
+    expect(later).toBeGreaterThan(start)
+  })
+
   test("stands still while the session is idle", async () => {
     const harness = await mount({ running: false })
     const before = await harness.frame()
