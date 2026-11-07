@@ -436,6 +436,68 @@ describe("createJokeGenerator", () => {
     expect(seen?.prompt).toContain("User: hello")
   })
 
+  test("creates the temporary session with the configured model", async () => {
+    const client = fakeClient(async () => ({ text: "Quack!" }))
+    const configured: ModelRef = { providerID: "opencode", id: "big-pickle" }
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      model: { kind: "model", model: configured },
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
+    expect(client.createdModel).toEqual(configured)
+    expect(client.createdModel).not.toEqual(MODEL)
+  })
+
+  test("keeps the session model when the option is unset", async () => {
+    const client = fakeClient(async () => ({ text: "Quack!" }))
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      model: { kind: "session" },
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
+    expect(client.createdModel).toEqual(MODEL)
+  })
+
+  test("does not touch the client when the configured model is unusable", async () => {
+    let createCalls = 0
+    let generateCalls = 0
+    const client = {
+      session: {
+        create: async () => {
+          createCalls += 1
+          return { id: "temp-session" }
+        },
+        generate: async () => {
+          generateCalls += 1
+          return { text: "Quack!" }
+        },
+        remove: async () => {},
+      },
+    } as unknown as JokeClient
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      model: { kind: "unusable" },
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(createCalls).toBe(0)
+    expect(generateCalls).toBe(0)
+  })
+
   test("does not use the one-shot generate endpoint", async () => {
     let oneShotCalls = 0
     const client = {

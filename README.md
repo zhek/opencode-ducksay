@@ -37,7 +37,7 @@ instead.
 - [How the duck behaves](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.md) — swimming, jokes,
   questions, talking to the duck and the water.
 - [Configuration and options](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.md) — `swimSpeed`,
-  `silent`, `llmTimeout`, `llmContextDepth` and the sidebar settings.
+  `silent`, `llmTimeout`, `llmContextDepth`, `llmModel` and the sidebar settings.
 
 ## License
 

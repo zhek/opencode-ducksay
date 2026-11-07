@@ -37,7 +37,7 @@ opencode plugin add opencode-ducksay
 - [Как ведёт себя уточка](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.ru.md) — плавание, шутки,
   вопросы, разговор с уточкой и вода.
 - [Конфигурация и опции](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.ru.md) — `swimSpeed`,
-  `silent`, `llmTimeout`, `llmContextDepth` и настройки боковой панели.
+  `silent`, `llmTimeout`, `llmContextDepth`, `llmModel` и настройки боковой панели.
 
 ## Лицензия
 

@@ -47,7 +47,7 @@ import {
   type JokeSource,
 } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
-import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
+import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmModel, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
 import { saveScreenshot } from "./screenshot.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
@@ -1326,6 +1326,7 @@ export default Plugin.define({
     const silent = resolveSilent(context.options)
     const llmTimeout = resolveLlmTimeout(context.options)
     const contextDepth = resolveContextDepth(context.options)
+    const llmModel = resolveLlmModel(context.options)
     // Read once, when the section appears: the panel may open in the middle of
     // a turn, long before the next event arrives.
     const workingNow = (sessionID: string) => context.data.session.status(sessionID) === "running"
@@ -1477,6 +1478,7 @@ export default Plugin.define({
           source: () => jokeSource(input.sessionID),
           depth: contextDepth,
           timeoutMs: llmTimeout,
+          model: llmModel,
         })(signal, jokeInput),
       }),
     })

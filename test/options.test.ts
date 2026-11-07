@@ -7,6 +7,7 @@ import {
   MAX_LLM_TIMEOUT_MS,
   MAX_SWIM_SPEED,
   resolveContextDepth,
+  resolveLlmModel,
   resolveLlmTimeout,
   resolveSilent,
   resolveSwimSpeed,
@@ -178,6 +179,65 @@ describe("resolveContextDepth", () => {
     expect(resolveContextDepth({ llmContextDepth: "много" })).toBe(DEFAULT_CONTEXT_DEPTH)
     expect(resolveContextDepth({ llmContextDepth: true })).toBe(DEFAULT_CONTEXT_DEPTH)
     expect(resolveContextDepth({ llmContextDepth: {} })).toBe(DEFAULT_CONTEXT_DEPTH)
+  })
+})
+
+describe("resolveLlmModel", () => {
+  test("keeps the session model when the option is absent", () => {
+    expect(resolveLlmModel(undefined)).toEqual({ kind: "session" })
+    expect(resolveLlmModel({})).toEqual({ kind: "session" })
+    expect(resolveLlmModel({ somethingElse: true })).toEqual({ kind: "session" })
+    expect(resolveLlmModel({ llmModel: null })).toEqual({ kind: "session" })
+  })
+
+  test("keeps the session model for blank strings", () => {
+    expect(resolveLlmModel({ llmModel: "" })).toEqual({ kind: "session" })
+    expect(resolveLlmModel({ llmModel: "   " })).toEqual({ kind: "session" })
+  })
+
+  test("keeps the session model for values that are not strings", () => {
+    expect(resolveLlmModel({ llmModel: 5 })).toEqual({ kind: "session" })
+    expect(resolveLlmModel({ llmModel: true })).toEqual({ kind: "session" })
+    expect(resolveLlmModel({ llmModel: {} })).toEqual({ kind: "session" })
+  })
+
+  test("splits a provider and a model at the first slash", () => {
+    expect(resolveLlmModel({ llmModel: "opencode/big-pickle" })).toEqual({
+      kind: "model",
+      model: { providerID: "opencode", id: "big-pickle" },
+    })
+  })
+
+  test("trims the value at both edges", () => {
+    expect(resolveLlmModel({ llmModel: " opencode/big-pickle " })).toEqual({
+      kind: "model",
+      model: { providerID: "opencode", id: "big-pickle" },
+    })
+  })
+
+  test("keeps a colon suffix as part of the model", () => {
+    // OpenRouter marks its free models with `:free`, and the suffix belongs to
+    // the model id rather than to a variant the plugin knows about.
+    expect(resolveLlmModel({ llmModel: "openrouter/deepseek-v3:free" })).toEqual({
+      kind: "model",
+      model: { providerID: "openrouter", id: "deepseek-v3:free" },
+    })
+  })
+
+  test("keeps everything after the first slash as the model", () => {
+    expect(resolveLlmModel({ llmModel: "provider/team/model" })).toEqual({
+      kind: "model",
+      model: { providerID: "provider", id: "team/model" },
+    })
+  })
+
+  test("reports a value without a provider or a model as unusable", () => {
+    // A non-blank value says the user meant to name a model, so the duck must
+    // not quietly fall back to the session model and spend it.
+    expect(resolveLlmModel({ llmModel: "opus" })).toEqual({ kind: "unusable" })
+    expect(resolveLlmModel({ llmModel: "/big-pickle" })).toEqual({ kind: "unusable" })
+    expect(resolveLlmModel({ llmModel: "opencode/" })).toEqual({ kind: "unusable" })
+    expect(resolveLlmModel({ llmModel: "/" })).toEqual({ kind: "unusable" })
   })
 })
 

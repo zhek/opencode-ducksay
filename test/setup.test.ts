@@ -401,9 +401,13 @@ interface DeferredCall {
 /** A model client whose answers the test resolves by hand. */
 function deferredClient() {
   const calls: DeferredCall[] = []
+  const createdModels: (ModelRef | undefined)[] = []
   const client: JokeClient = {
     session: {
-      create: async () => ({ id: "temp-session" }),
+      create: async (input) => {
+        createdModels.push(input.model)
+        return { id: "temp-session" }
+      },
       generate: (input, options) =>
         new Promise((resolve, reject) => {
           calls.push({ input, options, resolve, reject })
@@ -412,7 +416,7 @@ function deferredClient() {
       remove: async () => {},
     },
   }
-  return { client, calls }
+  return { client, calls, createdModels }
 }
 
 /** Lets request promise chains and Solid updates run. */
@@ -1384,6 +1388,57 @@ describe("generated jokes through the plugin", () => {
       await settle()
 
       expect(await mounted.frame()).toContain("Quack-quack!")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("uses llmModel for the request and leaves the session model alone", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      client: deferred.client,
+      options: { llmModel: "opencode/big-pickle" },
+    })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await settle()
+
+      expect(deferred.createdModels).toEqual([{ providerID: "opencode", id: "big-pickle" }])
+      expect(deferred.createdModels[0]).not.toEqual(MODEL)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("falls back with Quack-quack! and no toast when the configured model fails", async () => {
+    const failing: JokeClient = {
+      session: {
+        create: async () => {
+          throw new Error("model not found")
+        },
+        generate: async () => ({ text: "never" }),
+        remove: async () => {},
+      },
+    }
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      client: failing,
+      options: { llmModel: "opencode/nope" },
+    })
+
+    try {
+      await mounted.swim(5)
+      mounted.harness.emit("session.execution.succeeded", forSession)
+      await mounted.swim(RIGHT_EDGE + 6)
+      await settle()
+
+      expect(await mounted.frame()).toContain("Quack-quack!")
+      expect(mounted.harness.toasts).toEqual([])
     } finally {
       await mounted.close()
     }
