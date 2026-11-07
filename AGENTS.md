@@ -50,6 +50,17 @@
   in the spec: the exact option or command name, its description and default value (say so when there is none), the text
   itself rather than a summary, and the constant's exact value and unit. "A configurable timeout" or "an error message" is
   not enough — a reader must be able to check the value without opening the source.
+- **Logs describe failures, never content.** The plugin writes diagnostic logs only for failures and degradations:
+  `error` — a promised action did not happen (a joke did not arrive, a screenshot was not written, a command or event
+  handler threw, `setup` threw); `warn` — the plugin continued with a fallback (an invalid option, `.gitignore` not
+  written, a temporary session not removed, an empty model answer, a failed copy); `info` — debugging only (a cancelled
+  request, an unusable `llmModel` on every turn), off by default. The exact event catalogue, levels, messages and fields
+  live in `openspec/specs/error-logging/spec.md`; a new event is added to that spec with its code, and this rule does not
+  duplicate the list. Only metadata may be logged: event name, level, session id, path, option name and value, error code,
+  duration, counter, and host error text. The log MUST NOT contain the joke text, user messages, the prompt, the model
+  answer, file contents, diffs, or tool output. Successful operations and normal states (`busy`, `muted`, empty copy, empty
+  screenshot, narrow lane, expected cancellation) are not logged. The logger never throws, never logs its own failures,
+  and never changes the behaviour of the duck, toasts or screenshots.
 
 ### Where these rules live
 
