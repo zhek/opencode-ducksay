@@ -4,8 +4,6 @@
 - Branch: `chore/release-<version>`
 - Release date: `YYYY-MM-DD`
 
-PR title: `chore: release <version>` — squash-merge turns it into the commit on `main`.
-
 A feature raises the minor version; a fix raises the patch version.
 
 ## Checklist
