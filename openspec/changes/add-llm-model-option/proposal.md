@@ -19,8 +19,8 @@
 - Непустая строка не по формату (`"opus"` без провайдера) считается непригодной моделью: утка молчит с `Quack-quack!`,
   а не подставляет модель сессии.
 - `docs/configuration.md` и `docs/configuration.ru.md` получают раздел опции с примером экономии
-  `"llmModel": "opencode/big-pickle"`; `README.md` и `README.ru.md` — имя опции в перечне; `CHANGELOG.md` — запись в
-  `## Unreleased` → `### Added`.
+  `"llmModel": "opencode/big-pickle"`; `README.md` и `README.ru.md` — раздел об опции сразу после раздела скриншотов и
+  имя опции в перечне; `CHANGELOG.md` — запись в `## Unreleased` → `### Added`.
 
 ## Capabilities
 

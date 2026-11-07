@@ -19,6 +19,19 @@ Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters th
 Click `[img]` in the `Ducksay` heading, or run `/duck.img`, to save the duck's scene as a PNG. Pictures go to
 `.opencode/ducksay/screenshots/` in your project. The folder brings its own `.gitignore`, so they never reach git.
 
+## Choosing a model
+
+The duck jokes with the same model as your session. If that model is paid, you can give the duck a cheaper one:
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "llmModel": "opencode/big-pickle" } }]
+}
+```
+
+`llmModel` takes a model name in the `"provider/model"` form. Your session keeps its own model. If the model you named is
+missing, the duck answers `Quack-quack!` instead of a joke.
+
 ## Install
 
 Install the plugin with one command:
