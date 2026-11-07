@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- The duck could keep swimming after a turn had finished when a delayed status event arrived after the completion. Turn
+  events are now applied in timestamp order, so a stale event no longer restarts the swim.
 - A joke in East Asian characters or emoji broke the bubble: wrapping counted keyboard characters instead of the columns
   the terminal spends, so a 25-character line could be 31 columns wide and the closing `│` fell off the right edge. Two
   now count as two, accents take no room of their own, and a wide character is never cut in half.

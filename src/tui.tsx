@@ -737,8 +737,11 @@ export function Ducksay(props: {
    * it: a turn produces `session.execution.*` and `session.text.*`. The swim is
    * driven by the execution events, which cover the whole turn — generation,
    * tool calls, permission prompts. Status stays subscribed to as well: on a
-   * host that publishes it, a retry keeps the duck swimming, and a status event
-   * simply overwrites whatever the last execution event said.
+   * host that publishes it, a retry keeps the duck swimming, and every event
+   * is applied in timestamp order. A status event is ephemeral: one can
+   * arrive after the turn it described has already ended, and without the
+   * ordering check it would start the swim again. The same guard keeps a late
+   * idle from stopping a newer turn that has already started.
    */
   createEffect(() => {
     const data = props.data
@@ -746,25 +749,33 @@ export function Ducksay(props: {
     if (data === undefined || sessionID === undefined) return
     const mine = (event: { data?: { sessionID?: string } }) => event.data?.sessionID === sessionID
     const set = (value: boolean) => setBusy((current) => (current === value ? current : value))
+    let latestAt = Number.NEGATIVE_INFINITY
+    const apply = (event: { created?: number }, value: boolean) => {
+      if (typeof event.created === "number") {
+        if (event.created < latestAt) return
+        latestAt = event.created
+      }
+      set(value)
+    }
 
     const stops = [
       data.on("session.execution.started", (event) => {
-        if (mine(event)) set(true)
+        if (mine(event)) apply(event, true)
       }),
       data.on("session.execution.succeeded", (event) => {
-        if (mine(event)) set(false)
+        if (mine(event)) apply(event, false)
       }),
       data.on("session.execution.failed", (event) => {
-        if (mine(event)) set(false)
+        if (mine(event)) apply(event, false)
       }),
       data.on("session.execution.interrupted", (event) => {
-        if (mine(event)) set(false)
+        if (mine(event)) apply(event, false)
       }),
       data.on("session.idle", (event) => {
-        if (mine(event)) set(false)
+        if (mine(event)) apply(event, false)
       }),
       data.on("session.status", (event) => {
-        if (mine(event)) set(event.data.status.type !== "idle")
+        if (mine(event)) apply(event, event.data.status.type !== "idle")
       }),
     ]
     onCleanup(() => {
