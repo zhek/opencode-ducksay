@@ -8,8 +8,6 @@
 - Branch: `feat/<change-name>`
 - Issue: #<issue>
 
-PR title: `feat: <description>` — squash-merge turns it into the commit on `main`.
-
 ## Checklist
 
 ### Change artifacts

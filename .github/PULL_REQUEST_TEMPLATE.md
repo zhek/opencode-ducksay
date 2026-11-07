@@ -26,7 +26,7 @@ Then delete this comment.
 
 ## Checklist
 
-- [ ] The PR title is a Conventional Commit (`feat: …`, `fix: …`, `docs: …`, `chore: …`) and has no scope; squash-merge turns it into the commit on `main`.
+- [ ] The PR title is a Conventional Commit (`feat: …`, `fix: …`, `docs: …`, `chore: …`) and has no scope.
 - [ ] The branch is named as shown above, one branch per change.
 - [ ] `bun test` passes.
 - [ ] `bunx tsc --noEmit` passes.

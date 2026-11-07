@@ -2,9 +2,6 @@
 
 <!-- Why this maintenance work matters. State it if any user-visible behaviour changes. -->
 
-PR title: `chore: …`, `docs: …`, `refactor: …`, `test: …` or `perf: …` — squash-merge turns it into the commit on `main`.
-Branch: `chore/<slug>`
-
 ## Checklist
 
 - [ ] This does not add new functionality; a feature goes through an OpenSpec change with the feature template.

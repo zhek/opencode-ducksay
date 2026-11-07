@@ -4,7 +4,6 @@
 
 Fixes #<issue>
 
-PR title: `fix: <description>` — squash-merge turns it into the commit on `main`.
 Branch: `fix/<slug>`
 
 ## Reproduction
