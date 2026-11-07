@@ -8,6 +8,7 @@ import {
   createJokeGenerator,
   createJokeRequest,
   type JokeClient,
+  type JokeFailure,
   type JokeSource,
   type JokeTimers,
 } from "../src/joke.ts"
@@ -752,5 +753,308 @@ describe("createJokeRequest", () => {
       throw new Error("no")
     })
     await expect(request.result).resolves.toBeUndefined()
+  })
+})
+
+describe("joke failures", () => {
+  function collector() {
+    const failures: JokeFailure[] = []
+    return {
+      failures,
+      onFailure: (failure: JokeFailure) => failures.push(failure),
+    }
+  }
+
+  async function settle() {
+    for (let index = 0; index < 5; index += 1) await Promise.resolve()
+  }
+
+  test("reports a missing client", async () => {
+    const seen = collector()
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: {},
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "client_missing" }])
+  })
+
+  test("reports a missing source", async () => {
+    const seen = collector()
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: fakeClient(async () => ({ text: "Quack!" })),
+      source: () => undefined,
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "source_missing" }])
+  })
+
+  test("reports a prompt that could not be built", async () => {
+    const seen = collector()
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: fakeClient(async () => ({ text: "Quack!" })),
+      source: () => {
+        throw new Error("broken cache")
+      },
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toHaveLength(1)
+    expect(seen.failures[0]!.kind).toBe("prompt_failed")
+  })
+
+  test("reports an unusable model with its raw value", async () => {
+    const seen = collector()
+    const client = fakeClient(async () => ({ text: "Quack!" }))
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      model: { kind: "unusable" },
+      modelName: "haiku",
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "model_unusable", model: "haiku" }])
+    expect(client.calls).toBe(0)
+  })
+
+  test("reports a temporary session that could not be created", async () => {
+    const seen = collector()
+    const client: JokeClient = {
+      session: {
+        create: async () => {
+          throw new Error("no")
+        },
+        generate: async () => ({ text: "Quack!" }),
+        remove: async () => {},
+      },
+    }
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toHaveLength(1)
+    expect(seen.failures[0]).toMatchObject({ kind: "session_create_failed", model: "openai/gpt-5" })
+  })
+
+  test("reports a temporary session with no id", async () => {
+    const seen = collector()
+    let removed = 0
+    const client: JokeClient = {
+      session: {
+        create: async () => ({ id: "" }),
+        generate: async () => ({ text: "Quack!" }),
+        remove: async () => {
+          removed += 1
+        },
+      },
+    }
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "session_create_empty", model: "openai/gpt-5" }])
+    expect(removed).toBe(0)
+  })
+
+  test("reports a failed request", async () => {
+    const seen = collector()
+    const client = fakeClient(async () => {
+      throw new Error("provider is down")
+    })
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toHaveLength(1)
+    expect(seen.failures[0]).toMatchObject({
+      kind: "request_failed",
+      model: "openai/gpt-5",
+      durationMs: expect.any(Number),
+    })
+  })
+
+  test("reports a timeout", async () => {
+    const seen = collector()
+    const clock = fakeTimers()
+    const client = fakeClient(
+      async (_input, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        }),
+    )
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 10,
+      timers: clock.timers,
+      onFailure: seen.onFailure,
+    })
+
+    const pending = generator(new AbortController().signal)
+    await settle()
+    clock.fire()
+
+    await expect(pending).resolves.toBeUndefined()
+    expect(seen.failures).toHaveLength(1)
+    expect(seen.failures[0]).toMatchObject({
+      kind: "timeout",
+      model: "openai/gpt-5",
+      timeoutMs: 10,
+      durationMs: expect.any(Number),
+    })
+  })
+
+  test("reports an empty answer with its raw length", async () => {
+    const seen = collector()
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: fakeClient(async () => ({ text: "   " })),
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([
+      { kind: "empty_answer", durationMs: expect.any(Number), rawLength: 3 },
+    ])
+  })
+
+  test("reports a temporary session that could not be removed", async () => {
+    const seen = collector()
+    const client: JokeClient = {
+      session: {
+        create: async () => ({ id: "temp-session" }),
+        generate: async () => ({ text: "Quack!" }),
+        remove: async () => {
+          throw new Error("gone")
+        },
+      },
+    }
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
+    expect(seen.failures).toHaveLength(1)
+    expect(seen.failures[0]).toMatchObject({ kind: "cleanup_failed", temporaryID: "temp-session" })
+  })
+
+  test("reports an abort with the reason from the request", async () => {
+    const seen = collector()
+    const client = fakeClient(
+      async (_input, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        }),
+    )
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+    const request = createJokeRequest(generator)
+    await settle()
+    request.cancel("unmount")
+
+    await expect(request.result).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "aborted", reason: "unmount" }])
+  })
+
+  test("reports an abort before the request starts", async () => {
+    const seen = collector()
+    const client = fakeClient(async () => ({ text: "Quack!" }))
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client,
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+    const controller = new AbortController()
+    controller.abort("unmount")
+
+    await expect(generator(controller.signal)).resolves.toBeUndefined()
+    expect(seen.failures).toEqual([{ kind: "aborted", reason: "unmount" }])
+    expect(client.calls).toBe(0)
+  })
+
+  test("reports nothing on success", async () => {
+    const seen = collector()
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: fakeClient(async () => ({ text: "Quack!" })),
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: seen.onFailure,
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
+    expect(seen.failures).toEqual([])
+  })
+
+  test("does not let a throwing failure callback change the answer", async () => {
+    const generator = createJokeGenerator({
+      sessionID: "session-1",
+      client: fakeClient(async () => ({ text: "Quack!" })),
+      source: () => source([]),
+      depth: 2,
+      timeoutMs: 5_000,
+      onFailure: () => {
+        throw new Error("callback")
+      },
+    })
+
+    await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
   })
 })

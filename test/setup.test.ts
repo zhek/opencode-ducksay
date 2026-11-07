@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { afterAll, describe, expect, test } from "bun:test"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { render } from "@opentui/solid"
@@ -116,6 +116,10 @@ interface ShownToast {
  * repository the plugin is developed in.
  */
 const DEAD_DEFAULT = join(tmpdir(), "ducksay-default-location")
+
+afterAll(() => {
+  rmSync(DEAD_DEFAULT, { recursive: true, force: true })
+})
 
 interface Fake {
   readonly context: Context
@@ -1530,6 +1534,341 @@ describe("generated jokes through the plugin", () => {
       expect(after).not.toContain("╭")
     } finally {
       await mounted.close()
+    }
+  })
+})
+
+describe("logging", () => {
+  function logText(directory: string): string {
+    const logs = join(directory, ".opencode", "ducksay", "logs")
+    return existsSync(logs)
+      ? readdirSync(logs).sort().map((name) => readFileSync(join(logs, name), "utf8")).join("")
+      : ""
+  }
+
+  function logLines(directory: string): Record<string, any>[] {
+    const text = logText(directory).trim()
+    return text === "" ? [] : text.split("\n").map((line) => JSON.parse(line))
+  }
+
+  function projectSession(directory: string): SessionInfo {
+    return sessionInfo({ location: { directory } })
+  }
+
+  async function waitForFallback(mounted: Mounted): Promise<string> {
+    mounted.harness.emit("session.execution.succeeded", forSession)
+    await settle()
+    let last = ""
+    for (let step = 0; step < 120; step += 1) {
+      last = await mounted.swim(1, 200)
+      if (last.includes("Quack-quack!")) return last
+    }
+    throw new Error(`the logging test never reached a rest bubble:\n${last}`)
+  }
+
+  function command(harness: Fake, id: string): RegisteredCommand {
+    return harness.commands.find((entry) => entry.id === id)!
+  }
+
+  test("logs an invalid option once when the plugin loads", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const harness = fake({ options: { swimSpeed: -5 }, defaultDirectory: directory })
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+
+    try {
+      const lines = logLines(directory)
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatchObject({
+        level: "warn",
+        event: "config.invalid",
+        message: "The swimSpeed option is invalid.",
+        data: { option: "swimSpeed", value: -5, effective: 10, reason: "fallback" },
+      })
+    } finally {
+      await cleanup()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("an unusable llmModel says Quack-quack! and logs one config warning", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    let calls = 0
+    const client: JokeClient = {
+      session: {
+        create: async () => {
+          calls += 1
+          return { id: "temp-session" }
+        },
+        generate: async () => {
+          calls += 1
+          return { text: "Quack!" }
+        },
+        remove: async () => {},
+      },
+    }
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      options: { llmModel: "haiku" },
+      client,
+      defaultDirectory: directory,
+    })
+
+    try {
+      const frame = await waitForFallback(mounted)
+      expect(frame).toContain("Quack-quack!")
+      expect(calls).toBe(0)
+      expect(logLines(directory)).toHaveLength(1)
+      expect(logLines(directory)[0]).toMatchObject({
+        level: "warn",
+        event: "config.invalid",
+        data: { option: "llmModel", value: "haiku", effective: null, reason: "unusable" },
+      })
+      expect(logText(directory)).not.toContain("joke.model_unusable")
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs a clipboard refusal without the joke text", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      copyResult: false,
+      defaultDirectory: directory,
+    })
+
+    try {
+      await waitForFallback(mounted)
+      command(mounted.harness, "duck.copy").run()
+      await settle()
+
+      const line = logLines(directory).find((entry) => entry.event === "copy.failed")
+      expect(line).toMatchObject({
+        level: "warn",
+        event: "copy.failed",
+        message: "The clipboard did not accept the joke.",
+        data: { reason: "unavailable" },
+      })
+      expect(logText(directory)).not.toContain("Quack-quack!")
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs a clipboard exception with reason threw", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      copyResult: () => {
+        throw new Error("clipboard broke")
+      },
+      defaultDirectory: directory,
+    })
+
+    try {
+      await waitForFallback(mounted)
+      command(mounted.harness, "duck.copy").run()
+      await settle()
+
+      const line = logLines(directory).find((entry) => entry.event === "copy.failed")
+      expect(line).toMatchObject({
+        level: "warn",
+        event: "copy.failed",
+        data: { reason: "threw" },
+      })
+      expect(line?.error.message).toBe("clipboard broke")
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs a .gitignore failure but still saves the picture", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    mkdirSync(join(directory, ".opencode", "ducksay", ".gitignore"), { recursive: true })
+    const mounted = await mountClaim({
+      running: true,
+      session: projectSession(directory),
+      defaultDirectory: directory,
+    })
+
+    try {
+      await waitForFallback(mounted)
+      command(mounted.harness, "duck.img").run()
+      await settle()
+
+      const line = logLines(directory).find((entry) => entry.event === "screenshot.gitignore_failed")
+      expect(line).toMatchObject({
+        level: "warn",
+        event: "screenshot.gitignore_failed",
+        data: { path: join(directory, ".opencode", "ducksay", ".gitignore") },
+      })
+      expect(logLines(directory).some((entry) => entry.event === "screenshot.save_failed")).toBe(false)
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs a screenshot write failure with its phase", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const screenshots = join(directory, ".opencode", "ducksay", "screenshots")
+    mkdirSync(screenshots, { recursive: true })
+    chmodSync(screenshots, 0o500)
+    const mounted = await mountClaim({
+      running: true,
+      session: projectSession(directory),
+      defaultDirectory: directory,
+    })
+
+    try {
+      await waitForFallback(mounted)
+      command(mounted.harness, "duck.img").run()
+      await settle()
+
+      const line = logLines(directory).find((entry) => entry.event === "screenshot.save_failed")
+      expect(line).toMatchObject({
+        level: "error",
+        event: "screenshot.save_failed",
+        message: "The screenshot could not be saved.",
+        data: { phase: "write" },
+      })
+      expect(line?.data.path).toContain("screenshots")
+    } finally {
+      chmodSync(screenshots, 0o700)
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs a command that throws", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const harness = fake({ defaultDirectory: directory })
+    const toast = harness.context.ui.toast as unknown as { show: () => void }
+    toast.show = () => {
+      throw new Error("toast broke")
+    }
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      command(harness, "duck.talk").run("hello")
+
+      const line = logLines(directory).find((entry) => entry.event === "command.failed")
+      expect(line).toMatchObject({
+        level: "error",
+        event: "command.failed",
+        message: "A duck command failed.",
+        data: { command: "duck" },
+      })
+    } finally {
+      await unmount()
+      await cleanup()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs an event handler that throws", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const harness = fake({ defaultDirectory: directory })
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+
+    try {
+      const event = {
+        data: {
+          get sessionID(): string {
+            throw new Error("event broke")
+          },
+        },
+      }
+      harness.emit("session.execution.started", event)
+
+      const line = logLines(directory).find((entry) => entry.event === "event.failed")
+      expect(line).toMatchObject({
+        level: "error",
+        event: "event.failed",
+        message: "A duck event handler failed.",
+        data: { event: "session.execution.started" },
+      })
+    } finally {
+      await cleanup()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("logs and rethrows a setup failure", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const harness = fake({ defaultDirectory: directory })
+    const ui = harness.context.ui as unknown as { slot: () => void }
+    ui.slot = () => {
+      throw new Error("slot broke")
+    }
+
+    try {
+      expect(() => plugin.setup(harness.context)).toThrow("slot broke")
+
+      const line = logLines(directory).find((entry) => entry.event === "plugin.setup_failed")
+      expect(line).toMatchObject({
+        level: "error",
+        event: "plugin.setup_failed",
+        message: "The plugin setup failed.",
+      })
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("does not log a busy or a muted command", async () => {
+    for (const options of [{ running: true, session: sessionInfo() }, { running: true, session: sessionInfo(), options: { silent: true } }]) {
+      const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+      const mounted = await mountClaim({
+        ...options,
+        defaultDirectory: directory,
+      })
+
+      try {
+        command(mounted.harness, "duck.talk").run("hello")
+        await settle()
+        expect(logText(directory)).toBe("")
+      } finally {
+        await mounted.close()
+        rmSync(directory, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("does not log successful copy and screenshot commands", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ducksay-log-"))
+    const client: JokeClient = {
+      session: {
+        create: async () => ({ id: "temp-session" }),
+        generate: async () => ({ text: "Quack-quack!" }),
+        remove: async () => {},
+      },
+    }
+    const mounted = await mountClaim({
+      running: true,
+      session: projectSession(directory),
+      copyResult: true,
+      client,
+      defaultDirectory: directory,
+    })
+
+    try {
+      await waitForFallback(mounted)
+      command(mounted.harness, "duck.copy").run()
+      command(mounted.harness, "duck.img").run()
+      await settle()
+
+      expect(logText(directory)).toBe("")
+    } finally {
+      await mounted.close()
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 })

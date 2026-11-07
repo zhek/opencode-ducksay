@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { inflateSync } from "node:zlib"
@@ -9,6 +9,8 @@ import {
   SCREENSHOT_BORDER,
   SCREENSHOT_ROWS,
   SCREENSHOT_TITLE,
+  ScreenshotNamesExhaustedError,
+  ScreenshotSaveError,
   formatScreenshotStem,
   renderScreenshotBitmap,
   renderScreenshotPng,
@@ -473,6 +475,96 @@ describe("saving a screenshot", () => {
       const saved = readFileSync(first)
       expect([...saved.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
       expect(readFileSync(second).length).toBeGreaterThan(0)
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("screenshot failures", () => {
+  function saveError(run: () => void): ScreenshotSaveError {
+    try {
+      run()
+    } catch (error) {
+      expect(error).toBeInstanceOf(ScreenshotSaveError)
+      return error as ScreenshotSaveError
+    }
+    throw new Error("saveScreenshot did not throw")
+  }
+
+  test("reports the render phase when the ink cannot be read", () => {
+    const project = mkdtempSync(join(tmpdir(), "ducksay-shot-"))
+    const badInk: ScreenshotColor = {
+      toInts: () => {
+        throw new Error("no ink")
+      },
+    }
+
+    try {
+      const error = saveError(() =>
+        saveScreenshot({ rows: [""], width: 20, primary: badInk, directory: project }),
+      )
+      expect(error.phase).toBe("render")
+      expect(error.path).toBe(join(project, ".opencode", "ducksay", "screenshots"))
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
+  test("reports the mkdir phase when the project cannot hold the folder", () => {
+    const project = mkdtempSync(join(tmpdir(), "ducksay-shot-"))
+    const file = join(project, "not-a-directory")
+    writeFileSync(file, "")
+
+    try {
+      const error = saveError(() =>
+        saveScreenshot({ ...frame(["hello"]), directory: file }),
+      )
+      expect(error.phase).toBe("mkdir")
+      expect(error.path).toBe(join(file, ".opencode", "ducksay", "screenshots"))
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
+  test("reports the write phase when the folder is read-only", () => {
+    const project = mkdtempSync(join(tmpdir(), "ducksay-shot-"))
+    const screenshots = join(project, ".opencode", "ducksay", "screenshots")
+    mkdirSync(screenshots, { recursive: true })
+    chmodSync(screenshots, 0o500)
+
+    try {
+      const error = saveError(() =>
+        saveScreenshot({ ...frame(["hello"]), directory: project }),
+      )
+      expect(error.phase).toBe("write")
+      expect(error.path).toContain(join("screenshots", "ducksay-"))
+    } finally {
+      chmodSync(screenshots, 0o700)
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
+  test("reports exhausted names after one thousand collisions", () => {
+    const project = mkdtempSync(join(tmpdir(), "ducksay-shot-"))
+    const now = new Date(2026, 10, 5, 14, 30, 15)
+    const stem = formatScreenshotStem(now)
+    const screenshots = join(project, ".opencode", "ducksay", "screenshots")
+    mkdirSync(screenshots, { recursive: true })
+    for (let attempt = 1; attempt <= 1000; attempt++) {
+      writeFileSync(join(screenshots, attempt === 1 ? `${stem}.png` : `${stem}-${attempt}.png`), "")
+    }
+
+    try {
+      expect(() => saveScreenshot({ ...frame(["hello"]), directory: project, now })).toThrow(
+        ScreenshotNamesExhaustedError,
+      )
+      try {
+        saveScreenshot({ ...frame(["hello"]), directory: project, now })
+      } catch (error) {
+        expect(error).toBeInstanceOf(ScreenshotNamesExhaustedError)
+        expect((error as ScreenshotNamesExhaustedError).stem).toBe(stem)
+      }
     } finally {
       rmSync(project, { recursive: true, force: true })
     }

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
-import type { Data } from "@opencode/plugin/tui/context"
+import type { Context, Data } from "@opencode/plugin/tui/context"
 import { TextAttributes } from "@opentui/core"
 import type { BoxRenderable, CliRenderer, RGBA, TextRenderable } from "@opentui/core"
 import {
@@ -47,8 +47,18 @@ import {
   type JokeSource,
 } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
-import { DEFAULT_SWIM_SPEED, resolveContextDepth, resolveLlmModel, resolveLlmTimeout, resolveSilent, resolveSwimSpeed } from "./options.ts"
-import { saveScreenshot } from "./screenshot.ts"
+import { createLogger, type Logger } from "./log.ts"
+import { logConfigDiagnostic, logJokeFailure } from "./log-events.ts"
+import {
+  DEFAULT_SWIM_SPEED,
+  diagnoseOptions,
+  resolveContextDepth,
+  resolveLlmModel,
+  resolveLlmTimeout,
+  resolveSilent,
+  resolveSwimSpeed,
+} from "./options.ts"
+import { ScreenshotNamesExhaustedError, ScreenshotSaveError, saveScreenshot } from "./screenshot.ts"
 import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
 import {
   THINKING_STEPS,
@@ -374,8 +384,8 @@ export function Ducksay(props: {
    */
   let paintedRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
 
-  const cancelJoke = () => {
-    request?.cancel()
+  const cancelJoke = (reason: "turn" | "unmount" = "turn") => {
+    request?.cancel(reason)
     request = undefined
   }
 
@@ -414,7 +424,7 @@ export function Ducksay(props: {
       writeSnapshot()
       props.states.set(previousSessionID, state)
     }
-    cancelJoke()
+    cancelJoke("turn")
 
     const nextState = nextSessionID !== undefined ? props.states?.get(nextSessionID) : undefined
     state = nextState ?? createDuckState({
@@ -893,7 +903,7 @@ export function Ducksay(props: {
       // A new turn replaces the turn before it: the pending request is aborted
       // and the new turn asks for its own joke when it ends. A `/duck` reply
       // belongs to the old request, so it must not survive into the new one.
-      cancelJoke()
+      cancelJoke("turn")
       state.pendingReply = undefined
       setSpeech("idle")
       setJokeText(DEFAULT_BUBBLE_TEXT)
@@ -1025,7 +1035,7 @@ export function Ducksay(props: {
     // A cancelled request never delivers its answer, so `speech` stays
     // `waiting` and the next mount asks again instead of sitting on dots that
     // will never advance.
-    cancelJoke()
+    cancelJoke("unmount")
   })
 
   // `paint` writes imperative lines, so a signal change needs an explicit
@@ -1319,216 +1329,302 @@ export function Ducksay(props: {
   )
 }
 
-export default Plugin.define({
-  id: "ducksay",
-  setup: (context) => {
-    const swimSpeed = resolveSwimSpeed(context.options)
-    const silent = resolveSilent(context.options)
-    const llmTimeout = resolveLlmTimeout(context.options)
-    const contextDepth = resolveContextDepth(context.options)
-    const llmModel = resolveLlmModel(context.options)
-    // Read once, when the section appears: the panel may open in the middle of
-    // a turn, long before the next event arrives.
-    const workingNow = (sessionID: string) => context.data.session.status(sessionID) === "running"
-    // One store for the whole plugin lifetime. OpenCode rebuilds the sidebar
-    // when the displayed session changes, and a new section without this would
-    // start from the left edge instead of coming back where it was.
-    const states = createDuckStates()
-    // The command runs in `setup`, the speech lives in the mounted section.
-    // The handle is the bridge; it is absent while no section is mounted.
-    let handle: DuckHandle | undefined
+/**
+ * The project root a log line belongs to: where the session works, the location
+ * the TUI is showing, or the location the server calls the default.
+ */
+function logDirectory(context: Context, sessionID?: string): string {
+  const session = sessionID === undefined ? undefined : context.data.session.get(sessionID)
+  return session?.location?.directory
+    ?? context.location?.directory
+    ?? context.data.location.default().directory
+}
 
-    // A new turn clears the dialogue even for a session that is not displayed:
-    // the exchanges belonged to the turn that just ended. The section filters
-    // execution events by its own session, so this listener is not duplicated.
-    const stopDialogueReset = context.data.on("session.execution.started", (event) => {
-      const sessionID = event.data?.sessionID
+function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
+  const swimSpeed = resolveSwimSpeed(context.options)
+  const silent = resolveSilent(context.options)
+  const llmTimeout = resolveLlmTimeout(context.options)
+  const contextDepth = resolveContextDepth(context.options)
+  const llmModel = resolveLlmModel(context.options)
+  const rawLlmModel = typeof context.options?.llmModel === "string" ? context.options.llmModel : undefined
+  for (const diagnostic of diagnoseOptions(context.options)) logConfigDiagnostic(log, diagnostic)
+  // Read once, when the section appears: the panel may open in the middle of
+  // a turn, long before the next event arrives.
+  const workingNow = (sessionID: string) => context.data.session.status(sessionID) === "running"
+  // One store for the whole plugin lifetime. OpenCode rebuilds the sidebar
+  // when the displayed session changes, and a new section without this would
+  // start from the left edge instead of coming back where it was.
+  const states = createDuckStates()
+  // The command runs in `setup`, the speech lives in the mounted section.
+  // The handle is the bridge; it is absent while no section is mounted.
+  let handle: DuckHandle | undefined
+
+  // A new turn clears the dialogue even for a session that is not displayed:
+  // the exchanges belonged to the turn that just ended. The section filters
+  // execution events by its own session, so this listener is not duplicated.
+  const stopDialogueReset = context.data.on("session.execution.started", (event) => {
+    let sessionID: string | undefined
+    try {
+      sessionID = event.data?.sessionID
       if (sessionID === undefined) return
       const state = states.get(sessionID)
       if (state === undefined) return
       state.dialogue = []
       state.pendingReply = undefined
-    })
+    } catch (error) {
+      log.error("event.failed", "A duck event handler failed.", {
+        session: sessionID,
+        error,
+        data: { event: "session.execution.started" },
+      })
+    }
+  })
 
-    // The request reads the cache when the turn ends, not when the panel opens:
-    // by then `data` has the messages the turn produced. Without a session
-    // there is nothing to joke about, so the generator falls back to
-    // `Quack-quack!` instead of sending an empty prompt.
-    const jokeSource = (sessionID: string): JokeSource | undefined => {
-      const session = context.data.session.get(sessionID)
-      if (session === undefined) return undefined
-      const project = context.data.project.get(session.projectID)
-      const vcs = context.data.location.vcs.info()
-      return {
-        session,
-        project,
-        branch: vcs?.branch.current ?? vcs?.branch.default,
-        messages: context.data.session.message.list(sessionID),
-      }
+  // The request reads the cache when the turn ends, not when the panel opens:
+  // by then `data` has the messages the turn produced. Without a session
+  // there is nothing to joke about, so the generator falls back to
+  // `Quack-quack!` instead of sending an empty prompt.
+  const jokeSource = (sessionID: string): JokeSource | undefined => {
+    const session = context.data.session.get(sessionID)
+    if (session === undefined) return undefined
+    const project = context.data.project.get(session.projectID)
+    const vcs = context.data.location.vcs.info()
+    return {
+      session,
+      project,
+      branch: vcs?.branch.current ?? vcs?.branch.default,
+      messages: context.data.session.message.list(sessionID),
     }
+  }
 
-    // The command belongs to the keymap layer, not to the section: it stays
-    // available while the sidebar is rebuilt. It reaches the mounted section
-    // through the handle and refuses a session other than the displayed one.
-    const currentSession = () => {
-      const route = context.ui.router.current()
-      return route?.type === "session" ? route.sessionID : undefined
+  // The command belongs to the keymap layer, not to the section: it stays
+  // available while the sidebar is rebuilt. It reaches the mounted section
+  // through the handle and refuses a session other than the displayed one.
+  const currentSession = () => {
+    const route = context.ui.router.current()
+    return route?.type === "session" ? route.sessionID : undefined
+  }
+  const showToast = (message: string, variant: "info" | "success" | "error") =>
+    context.ui.toast.show({ message, variant, duration: 2000 })
+  const reportCopy = (result: DuckCopyResult) => {
+    if (result === "copied") showToast(COPIED_TOAST, "success")
+    else if (result === "failed") showToast(FAILED_COPY_TOAST, "error")
+    else showToast(EMPTY_COPY_TOAST, "info")
+  }
+  const runCommand = (command: "duck" | "duck.copy" | "duck.img", run: () => void) => {
+    try {
+      run()
+    } catch (error) {
+      log.error("command.failed", "A duck command failed.", {
+        session: currentSession(),
+        error,
+        data: { command },
+      })
     }
-    const showToast = (message: string, variant: "info" | "success" | "error") =>
-      context.ui.toast.show({ message, variant, duration: 2000 })
-    const reportCopy = (result: DuckCopyResult) => {
-      if (result === "copied") showToast(COPIED_TOAST, "success")
-      else if (result === "failed") showToast(FAILED_COPY_TOAST, "error")
-      else showToast(EMPTY_COPY_TOAST, "info")
-    }
-    const duckCommand = (input: string | undefined) => {
-      const sessionID = currentSession()
-      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
-        ? handle.duck(input)
-        : "busy"
-      if (result === "muted") showToast(SILENT_TOAST, "info")
-      else if (result === "busy") showToast(BUSY_TOAST, "info")
-    }
-    const copyCommand = () => {
-      const sessionID = currentSession()
-      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
-        ? handle.copy()
-        : "empty"
-      reportCopy(result)
-    }
-    const copyToClipboard = (text: string) => {
-      try {
-        return context.renderer.copyToClipboardOSC52(text)
-      } catch {
+  }
+  const duckCommand = (input: string | undefined) => runCommand("duck", () => {
+    const sessionID = currentSession()
+    const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+      ? handle.duck(input)
+      : "busy"
+    if (result === "muted") showToast(SILENT_TOAST, "info")
+    else if (result === "busy") showToast(BUSY_TOAST, "info")
+  })
+  const copyCommand = () => runCommand("duck.copy", () => {
+    const sessionID = currentSession()
+    const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+      ? handle.copy()
+      : "empty"
+    reportCopy(result)
+  })
+  const copyToClipboard = (text: string) => {
+    try {
+      const accepted = context.renderer.copyToClipboardOSC52(text)
+      if (accepted !== true) {
+        log.warn("copy.failed", "The clipboard did not accept the joke.", {
+          session: currentSession(),
+          data: { reason: "unavailable" },
+        })
         return false
       }
+      return true
+    } catch (error) {
+      log.warn("copy.failed", "The clipboard did not accept the joke.", {
+        session: currentSession(),
+        error,
+        data: { reason: "threw" },
+      })
+      return false
     }
-    /**
-     * The project root a screenshot belongs to: where the session works, or the
-     * location the TUI is showing, or the location the server calls default.
-     * All three are absolute paths the host hands over, so a plugin attached to
-     * a remote server never writes into whatever directory the TUI happened to
-     * start in. `location` is optional here because the record arrives over the
-     * wire: an older or partial session must send the picture to the default
-     * location rather than lose it.
-     */
-    const projectDirectory = (sessionID: string): string =>
-      context.data.session.get(sessionID)?.location?.directory
-      ?? context.location?.directory
-      ?? context.data.location.default().directory
-    /**
-     * Writes the frame the section handed over. A missing project root is a
-     * failed write as far as the reader is concerned: nothing was saved.
-     */
-    const saveFrame = (
-      sessionID: string | undefined,
-      frame: { rows: readonly string[]; width: number },
-    ): DuckScreenshotResult => {
-      if (sessionID === undefined) return "empty"
-      try {
-        saveScreenshot({ ...frame, directory: projectDirectory(sessionID), primary: context.theme.text.base })
-        return "saved"
-      } catch {
-        return "failed"
+  }
+  /**
+   * The project root a screenshot belongs to: where the session works, or the
+   * location the TUI is showing, or the location the server calls default.
+   * All three are absolute paths the host hands over, so a plugin attached to
+   * a remote server never writes into whatever directory the TUI happened to
+   * start in. `location` is optional here because the record arrives over the
+   * wire: an older or partial session must send the picture to the default
+   * location rather than lose it.
+   */
+  const projectDirectory = (sessionID: string): string => logDirectory(context, sessionID)
+  /**
+   * Writes the frame the section handed over. A missing project root is a
+   * failed write as far as the reader is concerned: nothing was saved.
+   */
+  const saveFrame = (
+    sessionID: string | undefined,
+    frame: { rows: readonly string[]; width: number },
+  ): DuckScreenshotResult => {
+    if (sessionID === undefined) return "empty"
+    try {
+      saveScreenshot(
+        { ...frame, directory: projectDirectory(sessionID), primary: context.theme.text.base },
+        {
+          onWarning: (warning) => log.warn(
+            "screenshot.gitignore_failed",
+            "The screenshot folder could not hide itself from git.",
+            {
+              session: sessionID,
+              error: warning.error,
+              data: { path: warning.path },
+            },
+          ),
+        },
+      )
+      return "saved"
+    } catch (error) {
+      if (error instanceof ScreenshotNamesExhaustedError) {
+        log.error("screenshot.names_exhausted", "The screenshot name space for this second is exhausted.", {
+          session: sessionID,
+          data: { stem: error.stem },
+        })
+      } else if (error instanceof ScreenshotSaveError) {
+        log.error("screenshot.save_failed", "The screenshot could not be saved.", {
+          session: sessionID,
+          error: error.cause,
+          data: { path: error.path, phase: error.phase },
+        })
+      } else {
+        log.error("screenshot.save_failed", "The screenshot could not be saved.", {
+          session: sessionID,
+          error,
+          data: { path: projectDirectory(sessionID), phase: "write" },
+        })
       }
+      return "failed"
     }
-    const reportScreenshot = (result: DuckScreenshotResult) => {
-      if (result === "saved") showToast(SCREENSHOT_SAVED_TOAST, "success")
-      else if (result === "failed") showToast(FAILED_SCREENSHOT_TOAST, "error")
-      else showToast(NO_FRAME_TOAST, "info")
-    }
-    const screenshotCommand = () => {
-      const sessionID = currentSession()
-      const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
-        ? handle.screenshot()
-        : "empty"
-      reportScreenshot(result)
-    }
+  }
+  const reportScreenshot = (result: DuckScreenshotResult) => {
+    if (result === "saved") showToast(SCREENSHOT_SAVED_TOAST, "success")
+    else if (result === "failed") showToast(FAILED_SCREENSHOT_TOAST, "error")
+    else showToast(NO_FRAME_TOAST, "info")
+  }
+  const screenshotCommand = () => runCommand("duck.img", () => {
+    const sessionID = currentSession()
+    const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+      ? handle.screenshot()
+      : "empty"
+    reportScreenshot(result)
+  })
 
-    // `slot` already returns its own teardown: it unregisters the claim.
-    const unregisterSection = context.ui.slot({
-      append: "sidebar.content",
-      // The host calls `render` once and keeps the input's `sessionID` getter
-      // reactive. Passing that getter straight through lets the section swap
-      // snapshots on a tab switch. The two closures read the input when they
-      // are called, so a new session also gets its own status and request
-      // instead of the first session's.
-      render: (input) => createComponent(Ducksay, {
-        primary: context.theme.text.base,
-        swimSpeed,
-        silent,
-        renderer: context.renderer,
-        data: context.data,
-        get sessionID() {
-          return input.sessionID
+  // `slot` already returns its own teardown: it unregisters the claim.
+  const unregisterSection = context.ui.slot({
+    append: "sidebar.content",
+    // The host calls `render` once and keeps the input's `sessionID` getter
+    // reactive. Passing that getter straight through lets the section swap
+    // snapshots on a tab switch. The two closures read the input when they
+    // are called, so a new session also gets its own status and request
+    // instead of the first session's.
+    render: (input) => createComponent(Ducksay, {
+      primary: context.theme.text.base,
+      swimSpeed,
+      silent,
+      renderer: context.renderer,
+      data: context.data,
+      get sessionID() {
+        return input.sessionID
+      },
+      states,
+      copy: copyToClipboard,
+      notify: reportCopy,
+      muted: context.theme.text.muted,
+      screenshot: (frame) => saveFrame(input.sessionID, frame),
+      notifyScreenshot: reportScreenshot,
+      expose: (next) => {
+        handle = next
+      },
+      isRunning: () => workingNow(input.sessionID),
+      joke: (signal, jokeInput) => createJokeGenerator({
+        client: context.client,
+        sessionID: input.sessionID,
+        source: () => jokeSource(input.sessionID),
+        depth: contextDepth,
+        timeoutMs: llmTimeout,
+        model: llmModel,
+        modelName: rawLlmModel,
+        onFailure: (failure) => logJokeFailure(log, failure, input.sessionID),
+      })(signal, jokeInput),
+    }),
+  })
+
+  /**
+   * Registers the slash command from inside the slot tree.
+   *
+   * `setup` runs outside the TUI's keymap provider, so calling `layer` there
+   * fails the whole plugin with `Keymap.Provider is missing`. The `app` slot
+   * is mounted under that provider and lives as long as the TUI, so the
+   * command stays available while the sidebar is rebuilt or no session is
+   * open; disposing the slot removes the layer.
+   */
+  const RegisterCommands = () => {
+    context.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        {
+          id: "duck.talk",
+          title: "Talk to the duck",
+          slash: { name: "duck", arguments: true },
+          run: duckCommand,
         },
-        states,
-        copy: copyToClipboard,
-        notify: reportCopy,
-        muted: context.theme.text.muted,
-        screenshot: (frame) => saveFrame(input.sessionID, frame),
-        notifyScreenshot: reportScreenshot,
-        expose: (next) => {
-          handle = next
+        {
+          id: "duck.copy",
+          title: "Copy the duck's latest joke",
+          bind: false,
+          slash: { name: "duck.copy" },
+          run: copyCommand,
         },
-        isRunning: () => workingNow(input.sessionID),
-        joke: (signal, jokeInput) => createJokeGenerator({
-          client: context.client,
-          sessionID: input.sessionID,
-          source: () => jokeSource(input.sessionID),
-          depth: contextDepth,
-          timeoutMs: llmTimeout,
-          model: llmModel,
-        })(signal, jokeInput),
-      }),
-    })
+        {
+          id: "duck.img",
+          title: "Create a screenshot of the duck",
+          bind: false,
+          slash: { name: "duck.img" },
+          run: screenshotCommand,
+        },
+      ],
+    }))
+    return null
+  }
+  const unregisterCommands = context.ui.slot({
+    append: "app",
+    render: () => createComponent(RegisterCommands, {}),
+  })
 
-    /**
-     * Registers the slash command from inside the slot tree.
-     *
-     * `setup` runs outside the TUI's keymap provider, so calling `layer` there
-     * fails the whole plugin with `Keymap.Provider is missing`. The `app` slot
-     * is mounted under that provider and lives as long as the TUI, so the
-     * command stays available while the sidebar is rebuilt or no session is
-     * open; disposing the slot removes the layer.
-     */
-    const RegisterCommands = () => {
-      context.keymap.layer(() => ({
-        mode: "global",
-        commands: [
-          {
-            id: "duck.talk",
-            title: "Talk to the duck",
-            slash: { name: "duck", arguments: true },
-            run: duckCommand,
-          },
-          {
-            id: "duck.copy",
-            title: "Copy the duck's latest joke",
-            bind: false,
-            slash: { name: "duck.copy" },
-            run: copyCommand,
-          },
-          {
-            id: "duck.img",
-            title: "Create a screenshot of the duck",
-            bind: false,
-            slash: { name: "duck.img" },
-            run: screenshotCommand,
-          },
-        ],
-      }))
-      return null
-    }
-    const unregisterCommands = context.ui.slot({
-      append: "app",
-      render: () => createComponent(RegisterCommands, {}),
-    })
+  return () => {
+    stopDialogueReset()
+    unregisterCommands()
+    unregisterSection()
+  }
+}
 
-    return () => {
-      stopDialogueReset()
-      unregisterCommands()
-      unregisterSection()
+export default Plugin.define({
+  id: "ducksay",
+  setup: (context) => {
+    const log = createLogger({ directory: (sessionID) => logDirectory(context, sessionID) })
+    try {
+      return setupDucksay(context, log)
+    } catch (error) {
+      log.error("plugin.setup_failed", "The plugin setup failed.", { error })
+      throw error
     }
   },
 })

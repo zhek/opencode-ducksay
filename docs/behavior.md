@@ -141,6 +141,19 @@ both and writes another file. If the file cannot be written, a `>(o ) Failed to 
 icon stays `[img]`. The same action is in the `/` list as `/duck.img`; with no section shown, a narrow sidebar or another
 session it only says `<(o ) The duck isn't in frame yet.` and writes nothing.
 
+## Logs
+
+The plugin keeps a diagnostic log in `.opencode/ducksay/logs/` in the project. It explains the quiet failures: why the
+duck said `Quack-quack!`, why a screenshot or a copy did not work, and which option value was ignored. It does not record
+the joke, your messages, the prompt or the model's answer.
+
+Logs are JSON Lines: one JSON object per line, in local time with its offset (`2026-11-07T18:42:10.004+03:00`). Files are
+named `ducksay-YYYY-MM-DD-N.log`, with `N` starting at `1`, and each file holds at most 1 MiB. At most seven files are
+kept: when an eighth is needed, the oldest one is deleted. The folder is created only when the first warning or error
+appears, and it brings the same `.gitignore` with `*` as the screenshots, so logs never reach git.
+
+There is no setting for the log: warnings and errors are written, and a normal build writes nothing else.
+
 ## The water
 
 The duck is in the water, not above it: the lower line of the drawing shares a row with the first line of the water, and a

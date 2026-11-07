@@ -13,6 +13,7 @@
 import { deflateSync } from "node:zlib"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { ensureDucksayFolder } from "./ducksay-folder.ts"
 import { CELL_HEIGHT, CELL_WIDTH, TITLE_WIDTH, cellAlpha, titleCellAlpha } from "./screenshot-font.ts"
 import { columnsOf } from "./width.ts"
 
@@ -124,6 +125,47 @@ export function renderScreenshotPng(frame: ScreenshotFrame): Uint8Array {
   return encodePng(renderScreenshotBitmap(frame))
 }
 
+/** The step of saving a picture that failed. */
+export type ScreenshotPhase = "render" | "mkdir" | "write"
+
+/** A non-fatal problem the caller may report; the picture is still saved. */
+export interface ScreenshotWarning {
+  readonly kind: "gitignore"
+  readonly path: string
+  readonly error: unknown
+}
+
+/** Optional callbacks for a save. */
+export interface ScreenshotSaveOptions {
+  readonly onWarning?: (warning: ScreenshotWarning) => void
+}
+
+/** A failed save, with the step that failed and the path it was working on. */
+export class ScreenshotSaveError extends Error {
+  readonly phase: ScreenshotPhase
+  readonly path: string
+  readonly cause: unknown
+
+  constructor(phase: ScreenshotPhase, path: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = "ScreenshotSaveError"
+    this.phase = phase
+    this.path = path
+    this.cause = cause
+  }
+}
+
+/** The one-thousand-name budget for a single second is spent. */
+export class ScreenshotNamesExhaustedError extends Error {
+  readonly stem: string
+
+  constructor(stem: string) {
+    super("the screenshot name space for this second is exhausted")
+    this.name = "ScreenshotNamesExhaustedError"
+    this.stem = stem
+  }
+}
+
 /**
  * Writes the card and returns its absolute path.
  *
@@ -136,12 +178,36 @@ export function renderScreenshotPng(frame: ScreenshotFrame): Uint8Array {
  */
 export function saveScreenshot(
   frame: ScreenshotFrame & { readonly directory: string; readonly now?: Date },
+  options?: ScreenshotSaveOptions,
 ): string {
-  const png = renderScreenshotPng(frame)
   const folder = join(frame.directory, ".opencode", "ducksay")
   const directory = join(folder, "screenshots")
-  mkdirSync(directory, { recursive: true })
-  hideFromGit(folder)
+  let png: Uint8Array
+  try {
+    png = renderScreenshotPng(frame)
+  } catch (error) {
+    throw new ScreenshotSaveError("render", directory, error)
+  }
+
+  let prepared
+  try {
+    prepared = ensureDucksayFolder(frame.directory)
+    mkdirSync(join(prepared.folder, "screenshots"), { recursive: true })
+  } catch (error) {
+    throw new ScreenshotSaveError("mkdir", directory, error)
+  }
+
+  if (prepared.gitignore === "failed") {
+    try {
+      options?.onWarning?.({
+        kind: "gitignore",
+        path: join(prepared.folder, ".gitignore"),
+        error: prepared.gitignoreError,
+      })
+    } catch {
+      // A warning must not cost the picture.
+    }
+  }
 
   const stem = formatScreenshotStem(frame.now ?? new Date())
   for (let attempt = 1; attempt <= 1000; attempt++) {
@@ -152,31 +218,12 @@ export function saveScreenshot(
       writeFileSync(path, png, { flag: "wx" })
       return path
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw new ScreenshotSaveError("write", path, error)
+      }
     }
   }
-  throw new Error("the screenshot name space for this second is exhausted")
-}
-
-/** The line the screenshot folder writes into its own `.gitignore`. */
-const GITIGNORE = "*"
-
-/**
- * Keeps the folder's contents out of version control, the way the folder came
- * to exist in the first place: by itself, without the reader editing anything.
- *
- * `wx` is also the check for an existing file — the reader's own rules, or ours
- * from an earlier save, stay exactly as they are. When the file cannot be
- * written at all the picture still matters and this does not, so the failure is
- * dropped rather than reported: a project on read-only media should still be
- * able to save a duck.
- */
-function hideFromGit(folder: string): void {
-  try {
-    writeFileSync(join(folder, ".gitignore"), `${GITIGNORE}\n`, { flag: "wx" })
-  } catch {
-    // Nothing to undo: the file simply is not there.
-  }
+  throw new ScreenshotNamesExhaustedError(stem)
 }
 
 /**
