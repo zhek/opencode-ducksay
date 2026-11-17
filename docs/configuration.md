@@ -217,10 +217,9 @@ bun test            # unit and rendering tests
 bunx tsc --noEmit   # typecheck
 ```
 
-Editing `src/duck.ts` reloads the plugin without a restart — the redrawn art shows up in the open sidebar straight away.
-
-Restart OpenCode after changing the animation itself. A reload re-reads the plugin and redraws the art, but a section
-that is already on screen keeps the component it was built from, so it keeps swimming the way it did before. The duck
-picks up the new behavior on the next start.
+A running TUI keeps the module graph it loaded, so editing `src/duck.ts` or any other source file does not reach an open
+sidebar. Touch the plugin entry (`.opencode/plugins/ducksay/tui.ts`) to reload the entry, or restart OpenCode, after
+changing the art or the animation. A section that is already on screen keeps the component it was built from even after a
+reload, so a change to the animation shows up on the next start.
 
 To stop using the local copy, delete the `.opencode/plugins/ducksay` directory.

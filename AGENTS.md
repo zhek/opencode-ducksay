@@ -1,32 +1,42 @@
 # AGENTS.md
 
-`ducksay` — an OpenCode **TUI/CLI plugin** (TypeScript, Node + npm). Repo is greenfield: no `package.json` or source yet.
+`ducksay` — an OpenCode **TUI/CLI plugin** written in TypeScript, tested with Bun and published to npm as
+`opencode-ducksay`. It draws an ASCII duck in the TUI session sidebar.
 
 ## Non-negotiable rules
 
 - **All code must be covered by automated tests.** New functionality and bug fixes always get one — a bug-fix test must
-  reproduce the original defect (fails before the fix, passes after). An implementation task without tests is not done.
-- **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests, and update the project
-  documentation (`README.md`, `README.ru.md`, `docs/configuration.md`, `docs/configuration.ru.md`, the `## Unreleased`
-  section of `CHANGELOG.md`).
+  reproduce the original defect (fails before the fix, passes after). Every functional task in `tasks.md` gets a separate
+  automated-test task; an implementation task without tests is not done.
+- **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests (`bun test` and
+  `bunx tsc --noEmit`), and update the project documentation (`README.md` with `README.ru.md`, every touched `docs/*.md`
+  with its `docs/*.ru.md` counterpart — currently `docs/behavior.md`/`docs/behavior.ru.md` and
+  `docs/configuration.md`/`docs/configuration.ru.md` — and, when the change is user-visible, the `## Unreleased` section
+  of `CHANGELOG.md`).
   Documentation is part of the task, not a follow-up. The documentation task never bumps the version. If the change grows
   after both tasks are ticked and new tasks are added, reopen them: clear their checkboxes, keep them at the end of the
   list, and renumber them along with any new section. The old tick belongs to the old scope — the added code has not been
   tested or documented.
 - **Documentation language.** OpenSpec artifacts in **Russian**; project documentation in **English**, each
-  user-facing document with a Russian counterpart: `README.ru.md` next to `README.md` and `docs/configuration.ru.md` next
-  to `docs/configuration.md`. Both versions must change in the same task, and every document added to `docs/` gets a
-  `*.ru.md` counterpart linked from the Russian README. Code, identifiers, and file names are always English.
+  user-facing document with a Russian counterpart: `README.ru.md` next to `README.md`, and a `*.ru.md` next to every
+  user-facing `docs/*.md` — currently `docs/behavior.ru.md` and `docs/configuration.ru.md`. Both versions must change in
+  the same task, and every document added to `docs/` gets a `*.ru.md` counterpart linked from the Russian README. Code,
+  identifiers, and file names are always English.
 - **README links are absolute.** `README.md` and `README.ru.md` are published on npm and rendered outside this tree, so
   every Markdown link and image in them MUST be a full `https://…` URL — including the language switcher and the license.
   A relative `docs/…` or `LICENSE` link is broken there. `docs/*.md` are not published and may keep relative links.
 - **The demo GIF must match the plugin.** If a change alters anything the README GIFs show — the duck art, the wave
   pattern, bubble width and wrapping, the Ducksay section title and rows, the `/duck` hint, or the chat window and command
-  menu the generator draws — update `scripts/make-demo-gif.ts` and `scripts/demo-layout.ts` and regenerate both
-  `assets/ducksay-demo.gif` and `assets/ducksay-demo.ru.gif` with `bun run demo:gif` in the same task. This is part of the
-  change, not follow-up work: an outdated GIF shows the reader a plugin that no longer exists. Sprites, waves and the
-  bubble come from `src/`, but the window chrome and layout are drawn by the script, so check the renderer yourself.
-  `test/demo-gif.test.ts` keeps the generator in step with the plugin and must pass after the update.
+  menu the generator draws — `tasks.md` gets a task to update `scripts/make-demo-gif.ts` and `scripts/demo-layout.ts` and
+  regenerate both `assets/ducksay-demo.gif` and `assets/ducksay-demo.ru.gif` with `bun run demo:gif` in the same change.
+  This is part of the change, not follow-up work: an outdated GIF shows the reader a plugin that no longer exists.
+  Sprites, waves and the bubble come from `src/`, but the window chrome and layout are drawn by the script, so check the
+  renderer yourself. `test/demo-gif.test.ts` keeps the generator in step with the plugin and must pass after the update.
+- **Entry points and the published package get a tarball check.** If a change touches `exports`, `files`, or either
+  entrypoint, `tasks.md` gets a task to verify the packed package: `bun pm pack`, unpack it into a temporary project's
+  `node_modules`, add that directory to the project's `opencode.json`, and run
+  `opencode --standalone --print-logs --log-level debug`. `bun test` does not cover this — it loads sources from the repo,
+  where `tsconfig` is read. Expect `loading plugin … index.ts`, `plugin=ducksay`, and no `Cannot find package 'react'`.
 - **Changelog first, versions later.** An ordinary PR never touches the version. A user-visible change is added to
   `CHANGELOG.md` under `## Unreleased` at the top of the file, under the same subheadings a released entry uses:
   `### Added`, `### Changed`, `### Fixed`, `### Removed`. Such a PR creates no `## [X.Y.Z]` heading, adds no release link,
@@ -79,8 +89,9 @@ bun run demo:gif              # regenerate both README GIFs (en + ru)
 
 `bun run demo:gif ru` regenerates one locale. The generator needs `@napi-rs/canvas` and `gifenc` from devDependencies.
 
-The runner is **Bun**, not Node. Rendering tests use `testRender` and `captureCharFrame` from `@opentui/solid`, which sit on
-OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching runners.
+The runner is **Bun**, not Node. Rendering tests use `testRender` from `@opentui/solid` and `captureCharFrame` on its
+result; both sit on OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching
+runners.
 
 Before a release, verify the packed tarball, not only the sources: `bun pm pack`, unpack it into a temporary project's
 `node_modules`, add that directory to the project's `opencode.json`, and run
@@ -94,8 +105,8 @@ to run, and adding one (tsc/build scripts run before testing) is wasted work.
 
 Verified locally: a `.ts` plugin loaded via `entrypoint=file://.../index.ts` and its `setup` ran with no build performed.
 
-`@opencode/plugin` must be installed in the repo (`npm i`) — it is a real dependency, not a global. Without it OpenCode
-fails the plugin with:
+`@opencode/plugin` must be installed in the repo (`bun install`, which reads `bun.lock`) — it is a real dependency, not a
+global. Without it OpenCode fails the plugin with:
 
 ```
 failed to load plugin ... Cannot find package '@opencode/plugin'
@@ -121,7 +132,8 @@ OpenCode, before judging what the running plugin draws.
 - CLI/TUI plugins are imported from **`@opencode/plugin/tui`** and OpenCode resolves that import at runtime — do not add
   an absolute path or vendor it. Core plugin surface is `@opencode/plugin`.
 - While developing, put the plugin under `.opencode/plugins/<name>/` in the repo — that directory is auto-discovered, so it
-  needs no `opencode.json(c)` entry. Discovery watches the file and reloads on change.
+  needs no `opencode.json(c)` entry. Discovery watches the entry file, not the modules it re-exports; see the module-graph
+  note above.
 - The package must ship **both** entrypoints: `exports["."]` → a root `index.ts` with a server definition
   (`Plugin.define({ id, setup })`) and `exports["./tui"]` → `src/tui.tsx`, plus a root `tui.ts` re-export. A project
   `opencode.json` entry activates a plugin through the server, which cannot load a TUI-only package, and without the root
@@ -153,7 +165,9 @@ Change: openspec/changes/<name>/
 
 - **No scope.** The `Change:` trailer already carries the OpenSpec change name — the directory under
   `openspec/changes/`, and the branch name once the `feat/` prefix is dropped — and a scope repeating it filters nothing,
-  since every commit of a change would share one value. The trailer is omitted when there is no change.
+  since every commit of a change would share one value. While the change is active the trailer is
+  `Change: openspec/changes/<name>/`; the archive commit that moves the directory uses
+  `Change: openspec/changes/archive/<date>-<name>/`. The trailer is omitted when there is no change.
 - Keep the body short. The code says *what*; the commit says *why*. Long bodies go stale faster than short ones.
 
 Rules:
@@ -170,10 +184,11 @@ Rules:
 - **Rule changes are `docs:` commits.** Editing the project rules — `AGENTS.md` and `openspec/config.yaml` (`context`,
   `rules.*`, `operations.*`) — goes in a `docs:` commit, for example `docs: require specs to pin user-visible values`,
   separate from implementation commits.
-- **`docs:` changes `README.md` and `README.ru.md` together**, and `docs/configuration.md` with
-  `docs/configuration.ru.md`, in one commit, so the versions cannot drift apart in history.
+- **`docs:` changes `README.md` and `README.ru.md` together**, and every touched `docs/*.md` with its `docs/*.ru.md`
+  counterpart, in one commit, so the versions cannot drift apart in history.
 - **Squash-merge** the PR into `main`; the PR title becomes the commit message.
-- **Archive inside the PR**, as its last commit, typed `docs:` (`docs: archive <name>`). `/opsx-archive` creates the main
+- **Archive inside the PR**, as its last commit, typed `docs:` (`docs: archive <name>`). Before archiving,
+  `openspec validate --strict <name>` passes and every checkbox in `tasks.md` is ticked. `/opsx-archive` creates the main
   spec and moves the change to `archive/` before the merge, so `main` is consistent the moment it lands — no active
   change, no capability missing from `openspec/specs/`.
 - Because the archive lands before review closes, a change to a requirement means editing it in **two** places: the
