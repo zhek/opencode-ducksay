@@ -33,7 +33,7 @@
 
 ### Commits
 
-- [ ] Every commit carries the trailer `Change: openspec/changes/<change-name>/`.
+- [ ] Every active-change commit carries the trailer `Change: openspec/changes/<change-name>/`; the archive commit uses `Change: openspec/changes/archive/<date>-<change-name>/`.
 - [ ] The spec delta is committed with `docs: add <change-name> spec` or `docs: update <change-name> spec`, not mixed with implementation.
 - [ ] The archive is committed separately with `docs: archive <change-name>`.
 - [ ] Feature commits include their tests in the same commit.
