@@ -342,14 +342,17 @@ async function mountClaim(
   let element: JSX.Element | undefined
   let commandElement: JSX.Element | undefined
   await render(
-    () => [
-      (element ??= claimRender({
+    () => {
+      const content = element ?? claimRender({
         get sessionID() {
           return session()
         },
-      })),
-      (commandElement ??= commandRender()),
-    ],
+      })
+      const commands = commandElement ?? commandRender()
+      element = content
+      commandElement = commands
+      return [content, commands]
+    },
     setup.renderer,
   )
 
@@ -1068,8 +1071,6 @@ describe("the duck.img command", () => {
 describe("dialogue lifecycle through the plugin", () => {
   const duckCommand = (harness: Fake): RegisteredCommand =>
     harness.commands.find((entry) => entry.slash?.name === "duck")!
-  const copyCommand = (harness: Fake): RegisteredCommand =>
-    harness.commands.find((entry) => entry.id === "duck.copy")!
 
   test("clears the dialogue when the shown session starts a new turn", async () => {
     const deferred = deferredClient()

@@ -1334,7 +1334,13 @@ export function Ducksay(props: {
       {Array.from({ length: lineCount }, (_, index) => (
         // The ref paints its own line: `onMount` runs before refs are assigned,
         // so a single paint there would leave every line empty.
-        <text wrapMode="none" ref={(text) => ((lines[index] = text), paint())} />
+        <text
+          wrapMode="none"
+          ref={(text) => {
+            lines[index] = text
+            paint()
+          }}
+        />
       ))}
     </box>
   )

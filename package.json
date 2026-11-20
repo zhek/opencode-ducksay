@@ -41,6 +41,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
     "demo:gif": "bun scripts/make-demo-gif.ts"
   },
   "dependencies": {
@@ -52,6 +53,7 @@
     "solid-js": "1.9.12"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@napi-rs/canvas": "^1.1.0",
     "@opentui/core": "^0.6.4",
     "@opentui/solid": "^0.6.4",
