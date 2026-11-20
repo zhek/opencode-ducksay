@@ -840,6 +840,22 @@ describe("swimming", () => {
       expect(columnOf(frame)).toBeLessThanOrEqual(RIGHT_EDGE)
     }
   })
+
+  test("clips the bubble to a lane narrower than the bubble and the duck", async () => {
+    const width = 20
+    const harness = await mount({ running: true, width, bubbleText: "Quack-quack!" })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(width)
+    const rows = frame.split("\n")
+
+    expect(columnOf(frame)).toBe(width - DUCK_WIDTH)
+    expect(frame).toContain(FACING_LEFT_OPEN)
+    // The bubble is cut at the left edge, but its right border still shows.
+    expect(frame).toContain("╮")
+    expect(rows.every((row) => row.length <= width)).toBe(true)
+    await harness.dispose()
+  })
 })
 
 describe("cow cameo trigger", () => {
