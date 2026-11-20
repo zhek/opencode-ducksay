@@ -7,6 +7,7 @@ import {
   collectJokeContext,
   createJokeGenerator,
   createJokeRequest,
+  limitJokeMessages,
   type JokeClient,
   type JokeFailure,
   type JokeSource,
@@ -134,6 +135,25 @@ function fakeTimers() {
     },
   }
 }
+
+describe("limitJokeMessages", () => {
+  const messages = Array.from({ length: 100 }, (_, index) => user(`message ${index}`, index))
+
+  test("keeps a tail large enough for the configured depth", () => {
+    const limited = limitJokeMessages(messages, 2)
+    expect(limited).toHaveLength(32)
+    expect(limited[0]!.time.created).toBe(68)
+  })
+
+  test("grows the tail with a deeper context", () => {
+    expect(limitJokeMessages(messages, 20)).toHaveLength(48)
+  })
+
+  test("returns a short history unchanged", () => {
+    const short = messages.slice(0, 5)
+    expect(limitJokeMessages(short, 2)).toBe(short)
+  })
+})
 
 describe("collectJokeContext", () => {
   const history = [

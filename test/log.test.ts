@@ -210,6 +210,20 @@ describe("the logger", () => {
     })
   })
 
+  test("starts a new file when the date changes", () => {
+    inProject((directory) => {
+      let now = new Date(2026, 10, 7, 23, 59, 59)
+      const logger = createLogger({ directory: () => directory, now: () => now, pid: PID })
+      logger.warn("joke.source_missing", "The session needed for a joke is gone.")
+
+      now = new Date(2026, 10, 8, 0, 0, 1)
+      logger.warn("joke.source_missing", "The session needed for a joke is gone.")
+
+      const logs = join(directory, ".opencode", "ducksay", "logs")
+      expect(readdirSync(logs).sort()).toEqual(["ducksay-2026-11-07-1.log", "ducksay-2026-11-08-1.log"])
+    })
+  })
+
   test("rotates to the next index when the file is full", () => {
     inProject((directory) => {
       const logs = join(directory, ".opencode", "ducksay", "logs")

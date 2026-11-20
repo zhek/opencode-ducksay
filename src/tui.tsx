@@ -23,6 +23,7 @@ import {
 import {
   clipUserText,
   createJokeGenerator,
+  limitJokeMessages,
   type JokeInput,
   type JokeSource,
 } from "./joke.ts"
@@ -963,7 +964,7 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
       session,
       project,
       branch: vcs?.branch.current ?? vcs?.branch.default,
-      messages: context.data.session.message.list(sessionID),
+      messages: limitJokeMessages(context.data.session.message.list(sessionID), contextDepth),
     }
   }
 
