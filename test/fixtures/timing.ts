@@ -17,8 +17,8 @@ export const PANEL_CONTENT_WIDTH = 37
 /** One column at the plugin's default speed. */
 export const COLUMN_MS = 1000 / DEFAULT_SWIM_SPEED
 
-/** The interval the section ticks on; see `TICK_MS` in `src/tui.tsx`. */
-export const TICK_MS = 33
+/** The interval the section ticks on; see `src/timing.ts`. */
+export { TICK_MS } from "../../src/timing.ts"
 
 /** Where the duck can get to: the lane minus the art. */
 export const RIGHT_EDGE = PANEL_WIDTH - DUCK_WIDTH

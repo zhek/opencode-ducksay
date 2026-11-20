@@ -16,7 +16,6 @@
  */
 import {
   BUBBLE_CONTENT_ROWS,
-  BUBBLE_MAX_LINES,
   BUBBLE_WIDTH,
   bubbleRows,
   wrapBubbleText,
@@ -24,6 +23,7 @@ import {
 } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { laneLimit } from "../src/lane.ts"
+import { BEAK_ROW, BODY_ROW, HEAD_ROW, LOWER_WATER_ROW } from "../src/layout.ts"
 import { THINKING_STEPS, beakOpen, thinkingText } from "../src/thinking.ts"
 import { WAVE_GAP, WAVE_PERIOD, WAVE_ROW_OFFSET, WAVE_RUN, hasTilde } from "../src/wave.ts"
 
@@ -115,11 +115,6 @@ export const SPRITES = {
 } as const
 
 /** The section's row layout: five bubble rows, three art rows, one water row. */
-const HEAD_ROW = BUBBLE_MAX_LINES
-const BEAK_ROW = HEAD_ROW + 1
-const BODY_ROW = HEAD_ROW + 2
-const LOWER_WATER_ROW = HEAD_ROW + 3
-
 export const TURN_OUT_FRAMES = 26
 export const TURN_WAIT_FRAMES = 6
 export const TURN_TYPE_FRAMES = 22

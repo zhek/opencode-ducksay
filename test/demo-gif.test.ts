@@ -3,12 +3,12 @@ import {
   BUBBLE_TEXT_WIDTH,
   BUBBLE_WIDTH,
   BUBBLE_CONTENT_ROWS,
-  BUBBLE_MAX_LINES,
   bubbleRows,
   wrapBubbleText,
 } from "../src/bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
 import { laneLimit } from "../src/lane.ts"
+import { BEAK_ROW, BODY_ROW, HEAD_ROW, LOWER_WATER_ROW } from "../src/layout.ts"
 import { THINKING_STEPS, beakOpen, bubbleWords, revealText, thinkingText } from "../src/thinking.ts"
 import { hasTilde as pluginHasTilde } from "../src/wave.ts"
 import {
@@ -117,10 +117,10 @@ describe("demo parity with the plugin", () => {
   })
 
   test("draws the plugin's sprites and water on the section rows", () => {
-    const head = BUBBLE_MAX_LINES
-    const beak = head + 1
-    const body = head + 2
-    const lower = head + 3
+    const head = HEAD_ROW
+    const beak = BEAK_ROW
+    const body = BODY_ROW
+    const lower = LOWER_WATER_ROW
     const cases: ReadonlyArray<readonly [number, readonly string[]]> = [
       [0, DUCK_RIGHT],
       [FIRST_HOLD_START, DUCK_LEFT_OPEN],
@@ -419,7 +419,7 @@ describe("the demo GIF bubble frame", () => {
 
         for (const column of [at, at + BUBBLE_WIDTH - 1]) {
           const x = Math.round(GIF_LAYOUT.laneX + (column + 0.5) * GIF_LAYOUT.charWidth)
-          for (let y = Math.round(GIF_LAYOUT.rowY(top)); y < Math.round(GIF_LAYOUT.rowY(BUBBLE_MAX_LINES)) - 1; y++) {
+          for (let y = Math.round(GIF_LAYOUT.rowY(top)); y < Math.round(GIF_LAYOUT.rowY(HEAD_ROW)) - 1; y++) {
             expect(
               brightness(pixels, x, y),
               `${locale} frame ${frame}: gap in the bubble frame at x=${x}, y=${y}`,
