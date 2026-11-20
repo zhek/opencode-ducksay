@@ -30,6 +30,7 @@ Then delete this comment.
 - [ ] The branch is named as shown above, one branch per change.
 - [ ] `bun test` passes.
 - [ ] `bunx tsc --noEmit` passes.
+- [ ] `bun run lint` passes.
 - [ ] New behaviour and bug fixes come with automated tests in the same PR.
 - [ ] English and Russian documentation is updated together: `README.md` with `README.ru.md`, and every `docs/*.md` with its `docs/*.ru.md` counterpart.
 - [ ] If the plugin's visible appearance changed, the demo GIF generator is updated and both `assets/ducksay-demo.gif` and `assets/ducksay-demo.ru.gif` are regenerated with `bun run demo:gif`.

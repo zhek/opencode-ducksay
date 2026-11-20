@@ -22,6 +22,7 @@
 
 - [ ] `bun test` passes.
 - [ ] `bunx tsc --noEmit` passes.
+- [ ] `bun run lint` passes.
 - [ ] If entrypoints or the published package changed, the packed tarball is verified: `bun pm pack`, unpack it into a temporary project's `node_modules`, add that directory to the project's `opencode.json`, and run `opencode --standalone --print-logs --log-level debug`; expect `loading plugin … index.ts` and `plugin=ducksay`, with no `Cannot find package 'react'`.
 
 ### Documentation and changelog

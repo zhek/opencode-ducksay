@@ -8,8 +8,8 @@
 - **All code must be covered by automated tests.** New functionality and bug fixes always get one — a bug-fix test must
   reproduce the original defect (fails before the fix, passes after). Every functional task in `tasks.md` gets a separate
   automated-test task; an implementation task without tests is not done.
-- **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests (`bun test` and
-  `bunx tsc --noEmit`), and update the project documentation (`README.md` with `README.ru.md`, every touched `docs/*.md`
+- **Every OpenSpec `tasks.md` ends with two mandatory tasks** — run the automated tests and the linter (`bun test`,
+  `bunx tsc --noEmit` and `bun run lint`), and update the project documentation (`README.md` with `README.ru.md`, every touched `docs/*.md`
   with its `docs/*.ru.md` counterpart — currently `docs/behavior.md`/`docs/behavior.ru.md` and
   `docs/configuration.md`/`docs/configuration.ru.md` — and, when the change is user-visible, the `## Unreleased` section
   of `CHANGELOG.md`).
@@ -84,10 +84,13 @@ there first, then mirror here; the two must not drift.
 bun test                      # full suite
 bun test test/duck.test.ts    # single file
 bunx tsc --noEmit             # typecheck
+bun run lint                  # Biome check
 bun run demo:gif              # regenerate both README GIFs (en + ru)
 ```
 
-`bun run demo:gif ru` regenerates one locale. The generator needs `@napi-rs/canvas` and `gifenc` from devDependencies.
+`bun run lint` runs Biome with the formatter and import sorting off, so it only reports findings; fix new findings in the
+same change. `bun run demo:gif ru` regenerates one locale. The generator needs `@napi-rs/canvas` and `gifenc` from
+devDependencies.
 
 The runner is **Bun**, not Node. Rendering tests use `testRender` from `@opentui/solid` and `captureCharFrame` on its
 result; both sit on OpenTUI native modules and do not run under `node --test` at all. Do not "fix" such a test by switching
