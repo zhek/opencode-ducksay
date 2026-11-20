@@ -105,7 +105,7 @@ that fails, comes back empty or takes too long is not added to the dialogue.
 The copy icon `[copy]` sits at the right of the `Ducksay` heading. A left click on it puts the whole latest joke on the
 terminal clipboard, including the part the bubble hides behind `…` and the answer to `/duck`. The text is wrapped as
 `( o)< {joke} (opencode-ducksay)`; the bubble itself stays plain, and copying the same joke twice does not nest the
-wrapper.
+wrapper. Control characters are removed and the copied text is capped at 4096 characters.
 
 The icon is available while the joke is ready. While the joke is loading, before the first finished turn, while a question
 is open, or with `silent: true`, it is dimmed or hidden and a click does nothing. A successful copy shows `✓` in place of

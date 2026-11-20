@@ -261,6 +261,7 @@ describe("resolveSilent", () => {
   test("keeps speech on for false and for values that are not true", () => {
     expect(resolveSilent({ silent: false })).toBe(false)
     expect(resolveSilent({ silent: "false" })).toBe(false)
+    expect(resolveSilent({ silent: " FALSE " })).toBe(false)
     expect(resolveSilent({ silent: 0 })).toBe(false)
     expect(resolveSilent({ silent: "yes" })).toBe(false)
     expect(resolveSilent({ silent: {} })).toBe(false)
@@ -367,6 +368,7 @@ describe("diagnoseOptions", () => {
       llmTimeout: 0,
       llmContextDepth: 99,
       llmModel: "haiku",
+      silent: "maybe",
     })
 
     expect(diagnostics.map((diagnostic) => diagnostic.option)).toEqual([
@@ -374,10 +376,24 @@ describe("diagnoseOptions", () => {
       "llmTimeout",
       "llmContextDepth",
       "llmModel",
+      "silent",
     ])
   })
 
-  test("does not diagnose silent", () => {
-    expect(diagnoseOptions({ silent: "maybe" })).toEqual([])
+  test("reports an invalid silent value and accepts true and false", () => {
+    expect(diagnoseOptions({ silent: "maybe" })).toEqual([
+      {
+        option: "silent",
+        value: "maybe",
+        effective: null,
+        reason: "fallback",
+        message: "The silent option is invalid.",
+      },
+    ])
+    expect(diagnoseOptions({ silent: 0 })).toHaveLength(1)
+    expect(diagnoseOptions({ silent: true })).toEqual([])
+    expect(diagnoseOptions({ silent: false })).toEqual([])
+    expect(diagnoseOptions({ silent: "true" })).toEqual([])
+    expect(diagnoseOptions({ silent: " FALSE " })).toEqual([])
   })
 })

@@ -33,6 +33,10 @@ export type Speech = "idle" | "waiting" | "ready"
  * because the swim tick is shorter than a cow column. `held` records how many
  * full-out intervals have already elapsed, so the cow pauses once and only then
  * starts its return.
+ *
+ * The cameo belongs to the swim, not to the rest pose: `park()` drops it when
+ * the duck stops. A saved snapshot keeps it on purpose, so a rebuilt sidebar
+ * resumes the same crossing instead of restarting it.
  */
 export interface CowCameo {
   columns: number
