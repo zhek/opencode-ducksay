@@ -13,7 +13,6 @@ import {
 } from "solid-js"
 import {
   BUBBLE_CONTENT_ROWS,
-  BUBBLE_MAX_LINES,
   BUBBLE_WIDTH,
   bubbleRows,
   wrapBubbleText,
@@ -47,6 +46,7 @@ import {
   type JokeSource,
 } from "./joke.ts"
 import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
+import { BEAK_ROW, BODY_ROW, HEAD_ROW, LOWER_WATER_ROW, QUESTION_ROW } from "./layout.ts"
 import { createLogger, type Logger } from "./log.ts"
 import { logConfigDiagnostic, logJokeFailure } from "./log-events.ts"
 import {
@@ -70,6 +70,14 @@ import {
   revealText,
   thinkingText,
 } from "./thinking.ts"
+import {
+  COPY_FEEDBACK_MS,
+  DEFAULT_BUBBLE_TEXT,
+  MAX_COLUMNS_PER_TICK,
+  SCREENSHOT_FEEDBACK_MS,
+  TICK_MS,
+  WATER_WIDTH,
+} from "./timing.ts"
 import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
 
 export interface DuckSprites {
@@ -86,9 +94,6 @@ const DEFAULT_SPRITES: DuckSprites = {
   leftOpen: DUCK_LEFT_OPEN,
 }
 
-/** Roughly the frame rate the TUI runs at, in milliseconds. */
-const TICK_MS = 33
-
 /**
  * Starts a heartbeat and returns its stop. The default is a plain interval; a
  * test hands in the renderer's manual clock so the swim can be stepped without
@@ -100,21 +105,6 @@ const defaultSchedule: Schedule = (tick, ms) => {
   const handle = setInterval(tick, ms)
   return () => clearInterval(handle)
 }
-
-/**
- * How many columns the duck may cover in one tick. It bounds a clock jump — a
- * machine waking up from suspend — instead of teleporting the duck.
- */
-const MAX_COLUMNS_PER_TICK = 8
-
-/**
- * Columns of water generated per row. Wider than any sidebar, and cut at the
- * lane's edge by `wrapMode="none"`, so the row never has to be measured.
- */
-const WATER_WIDTH = 160
-
-/** The message the duck shows at rest; tests may override it through `bubbleText`. */
-const DEFAULT_BUBBLE_TEXT = "Quack-quack!"
 
 /** The user side recorded for a `/duck` without text. */
 const SILENT_REPLY = "<silent>"
@@ -133,12 +123,6 @@ const IMG_ICON = "[img]"
 
 /** The confirmation shown in the icon after a successful copy or screenshot. */
 const COPY_DONE = "✓"
-
-/** How long the confirmation stays before the icon returns to its label. */
-const COPY_FEEDBACK_MS = 1200
-
-/** The screenshot confirmation lives as long as the copy one. */
-const SCREENSHOT_FEEDBACK_MS = 1200
 
 /** The wrapper put around a copied joke; the bubble itself stays plain. */
 const COPY_PREFIX = "( o)< "
@@ -171,20 +155,6 @@ export interface DuckHandle {
   copy(): DuckCopyResult
   screenshot(): DuckScreenshotResult
 }
-
-/**
- * Where the duck's three art lines sit inside the section, top to bottom.
- *
- * The five rows above are the bubble's reserve, so the duck stays on the same
- * rows whether or not the bubble is showing. The upper water line shares the
- * body row, and the lower water line gets its own row.
- */
-const HEAD_ROW = BUBBLE_MAX_LINES
-const BEAK_ROW = HEAD_ROW + 1
-const BODY_ROW = HEAD_ROW + 2
-const LOWER_WATER_ROW = HEAD_ROW + 3
-/** The question marker sits on the row above the head, inside the reserve. */
-const QUESTION_ROW = HEAD_ROW - 1
 
 /**
  * The `Ducksay` section of the session sidebar.
