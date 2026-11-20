@@ -40,6 +40,8 @@
 opencode plugin add opencode-ducksay
 ```
 
+Требуется OpenCode 2.0.28 или новее.
+
 Перезапустите OpenCode.
 
 Чтобы включить его только в одном проекте, добавьте `"opencode-ducksay"` в массив `plugins` в `opencode.json` этого

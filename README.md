@@ -40,6 +40,8 @@ Install the plugin with one command:
 opencode plugin add opencode-ducksay
 ```
 
+OpenCode 2.0.28 or newer is required.
+
 Restart OpenCode.
 
 To enable it in one project only, add `"opencode-ducksay"` to the `plugins` array in that project's `opencode.json`
