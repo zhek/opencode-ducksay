@@ -1,6 +1,15 @@
 import { plugin } from "bun"
+import { EventEmitter } from "node:events"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
+
+/**
+ * Every test renderer owns a `Console`, and the `TerminalConsoleCache`
+ * singleton keeps one `"entry"` listener per console. The suite disposes its
+ * harnesses, but a missed teardown must not turn into a noisy warning that
+ * hides a real one; the renderer tracker remains the actual fix.
+ */
+EventEmitter.defaultMaxListeners = 0
 
 /**
  * `bun test` resolves the bare `solid-js` package through the `node` condition,

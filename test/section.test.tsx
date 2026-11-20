@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { createComponent, render, testRender } from "@opentui/solid"
 import { createTestRenderer, ManualClock, type TestRendererSetup } from "@opentui/core/testing"
 import { RGBA } from "@opentui/core"
@@ -226,6 +226,17 @@ interface MountOptions {
   states?: DuckStates
 }
 
+/**
+ * Harnesses that are still holding a renderer. `dispose()` removes its own
+ * harness, and `afterEach` closes anything a test forgot, so a forgotten
+ * teardown cannot leak a `TerminalConsoleCache` listener into the next test.
+ */
+const liveHarnesses = new Set<Harness>()
+
+afterEach(async () => {
+  for (const harness of [...liveHarnesses]) await harness.dispose()
+})
+
 async function mount(options: MountOptions = {}): Promise<Harness> {
   const clock = new ManualClock()
   const handlers = new Map<string, (event: unknown) => void>()
@@ -368,7 +379,7 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
     return frame()
   }
 
-  return {
+  const harness: Harness = {
     renderer: setup.renderer,
     spans: () => setup.captureSpans(),
     activeTimers: () => activeTimers,
@@ -403,8 +414,13 @@ async function mount(options: MountOptions = {}): Promise<Harness> {
       setMounted(false)
       await frame()
     },
-    dispose: () => setup.dispose(),
+    dispose: async () => {
+      if (!liveHarnesses.delete(harness)) return
+      await setup.dispose()
+    },
   }
+  liveHarnesses.add(harness)
+  return harness
 }
 
 /**
