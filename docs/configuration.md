@@ -7,6 +7,8 @@ optional, and each section below lists what happens when it is not set.
 
 See [how the duck behaves](behavior.md) for the animation, jokes, questions and the water.
 
+OpenCode 2.0.28 or newer is required.
+
 ## Enabling the plugin
 
 `~/.config/opencode/cli.json`:
