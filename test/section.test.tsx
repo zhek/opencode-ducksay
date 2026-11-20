@@ -3539,7 +3539,13 @@ describe("duck command", () => {
   test("keeps five exchanges and drops the oldest whole", async () => {
     const states = createDuckStates()
     let next = 0
-    const harness = await mount({ states, joke: async () => `joke ${(next += 1)}` })
+    const harness = await mount({
+      states,
+      joke: async () => {
+        next += 1
+        return `joke ${next}`
+      },
+    })
 
     for (let index = 1; index <= 6; index += 1) {
       expect(harness.duck(`question ${index}`)).toBe("started")

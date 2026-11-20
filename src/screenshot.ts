@@ -13,7 +13,7 @@
 import { deflateSync } from "node:zlib"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { ensureDucksayFolder } from "./ducksay-folder.ts"
+import { ensureDucksayFolder, type DucksayFolder } from "./ducksay-folder.ts"
 import { CELL_HEIGHT, CELL_WIDTH, TITLE_WIDTH, cellAlpha, titleCellAlpha } from "./screenshot-font.ts"
 import { columnsOf } from "./width.ts"
 
@@ -189,7 +189,7 @@ export function saveScreenshot(
     throw new ScreenshotSaveError("render", directory, error)
   }
 
-  let prepared
+  let prepared: DucksayFolder
   try {
     prepared = ensureDucksayFolder(frame.directory)
     mkdirSync(join(prepared.folder, "screenshots"), { recursive: true })
@@ -458,7 +458,8 @@ function writeUint32(out: Uint8Array, at: number, value: number): void {
 let crcTable: Uint32Array | undefined
 
 function crc32(bytes: Uint8Array): number {
-  const table = (crcTable ??= buildCrcTable())
+  crcTable ??= buildCrcTable()
+  const table = crcTable
   let crc = 0xffffffff
   for (const byte of bytes) crc = (crc >>> 8) ^ table[(crc ^ byte) & 0xff]!
   return (crc ^ 0xffffffff) >>> 0
