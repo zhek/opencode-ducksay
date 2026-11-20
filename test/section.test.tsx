@@ -1,86 +1,32 @@
 /** @jsxImportSource @opentui/solid */
-import { afterEach, describe, expect, test } from "bun:test"
-import { createComponent, render, testRender } from "@opentui/solid"
-import { createTestRenderer, ManualClock, type TestRendererSetup } from "@opentui/core/testing"
-import { RGBA } from "@opentui/core"
-import type { CliRenderer } from "@opentui/core"
-import type { Data } from "@opencode/plugin/tui/context"
-import { createSignal, Show } from "solid-js/dist/solid.js"
-
-/**
- * `Show`'s two overloads are hard to pick through the manual `createComponent`
- * call below, so the test uses the non-keyed shape explicitly.
- */
-const Conditional = Show as unknown as (props: {
-  when: boolean
-  keyed?: false
-  children: (shown: boolean) => unknown
-}) => unknown
+import { describe, expect, test } from "bun:test"
+import { testRender } from "@opentui/solid"
+import { ManualClock } from "@opentui/core/testing"
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
-import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
-import { createDuckState, createDuckStates, type DuckStates } from "../src/duck-state.ts"
+import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import { createDuckState, createDuckStates } from "../src/duck-state.ts"
 import type { JokeInput } from "../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
 import { QUESTION_FRAME_MS } from "../src/question.ts"
 import { THINK_FRAME_MS, WORD_FRAME_MS } from "../src/thinking.ts"
 import { WAVE_PERIOD, waveSpeed } from "../src/wave.ts"
-import { Ducksay, type DuckCommandResult, type DuckCopyResult, type DuckHandle, type DuckScreenshotResult, type DuckSprites } from "../src/tui.tsx"
-
-/** The session the mounted panel belongs to. */
-const SESSION = "ses_duck"
-
-/** `SESSION_SIDEBAR_WIDTH` from OpenCode's session sidebar. */
-const PANEL_WIDTH = 42
-const PANEL_CONTENT_WIDTH = 37
-
-/**
- * `fg` clones the value, so the fixture has to be a real RGBA, not a plain
- * object. In the plugin the host passes `theme.text.base`, already an RGBA.
- */
-const PRIMARY = RGBA.fromHex("#e5e5e5")
-const MUTED = RGBA.fromHex("#666666")
-
-/** One column at the plugin's default speed. */
-const COLUMN_MS = 1000 / DEFAULT_SWIM_SPEED
-
-/** The interval the section ticks on; see `TICK_MS` in `src/tui.tsx`. */
-const TICK_MS = 33
-
-/** Where the duck can get to: the lane minus the art. */
-const RIGHT_EDGE = PANEL_WIDTH - DUCK_WIDTH
-
-/**
- * The middle art line, closed and open. All four versions start at column 0, so
- * `indexOf` on the captured frame is the duck's column exactly — no leading
- * spaces to account for.
- */
-const FACING_RIGHT = DUCK_RIGHT[1]
-const FACING_RIGHT_OPEN = DUCK_RIGHT_OPEN[1]
-const FACING_LEFT = DUCK_LEFT[1]
-const FACING_LEFT_OPEN = DUCK_LEFT_OPEN[1]
-const RIGHT_MARKERS = [FACING_RIGHT, FACING_RIGHT_OPEN]
-const LEFT_MARKERS = [FACING_LEFT, FACING_LEFT_OPEN]
-const ALL_MARKERS = [...RIGHT_MARKERS, ...LEFT_MARKERS]
-
-/**
- * The part of the head line both directions share: the right sprite pads before
- * the head, the left sprite pads after it, so only the two spaces and the two
- * underscores are common.
- */
-const HEAD = "  __"
-
-/** The column the duck is drawn at, read back from a captured frame. */
-function columnOf(frame: string): number {
-  const rows = frame.split("\n").filter((row) => ALL_MARKERS.some((marker) => row.includes(marker)))
-  expect(rows).toHaveLength(1)
-  const marker = ALL_MARKERS.find((candidate) => rows[0]!.includes(candidate))!
-  return rows[0]!.indexOf(marker)
-}
-
-/** True when the duck faces right, i.e. towards the middle from the left edge. */
-function facesRight(frame: string): boolean {
-  return RIGHT_MARKERS.some((marker) => frame.includes(marker))
-}
+import { Ducksay, type DuckSprites } from "../src/tui.tsx"
+import { SESSION } from "./fixtures/context.ts"
+import {
+  COLUMN_MS,
+  FACING_LEFT,
+  FACING_LEFT_OPEN,
+  FACING_RIGHT,
+  FACING_RIGHT_OPEN,
+  HEAD,
+  PANEL_CONTENT_WIDTH,
+  PANEL_WIDTH,
+  RIGHT_EDGE,
+  TICK_MS,
+  columnOf,
+  facesRight,
+} from "./fixtures/timing.ts"
+import { MUTED, PRIMARY, mount, rebuild, type Harness, type MountOptions } from "./fixtures/render.tsx"
 
 const COPY_ICON = "[copy]"
 const COPY_DONE = "✓"
@@ -129,309 +75,9 @@ function expectedMarkerColumn(frame: string): number {
   return columnOf(frame) + (facesRight(frame) ? DUCK_WIDTH - 2 : 1)
 }
 
-/** A form the fake host already has when the section mounts. */
-interface PendingForm {
-  readonly id: string
-  /** Defaults to the mounted session; pass another id to seed a foreign form. */
-  readonly sessionID?: string
-}
-
 /** Lets promise callbacks and the repaint effect run. */
 async function flushEffects() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve()
-}
-
-interface Harness {
-  readonly renderer: CliRenderer
-  /** Heartbeats the section currently holds; zero once the duck is at rest. */
-  readonly activeTimers: () => number
-  readonly liveRequests: () => number
-  readonly setRunning: (value: boolean) => void
-  /**
-   * Switches the displayed session. The prop is a getter, so the section sees
-   * the new id the way a host that re-renders the sidebar would.
-   */
-  readonly setSession: (sessionID: string) => void
-  /** Emits one host event through the same subscription the section uses. */
-  readonly emit: (type: string, event: unknown) => void
-  /** Drives the section the way the `/duck` command does. */
-  readonly duck: (text?: string) => DuckCommandResult | undefined
-  /** The session the live handle belongs to; absent once unmounted. */
-  readonly handleSessionID: () => string | undefined
-  /** Drives the section the way the palette copy command does. */
-  readonly copy: () => DuckCopyResult | undefined
-  /** Text handed to the section's clipboard callback, in order. */
-  readonly copies: readonly string[]
-  /** Copy outcomes the section reported from the icon. */
-  readonly notifies: readonly ("copied" | "failed")[]
-  /** Drives the section the way the palette screenshot command does. */
-  readonly screenshot: () => DuckScreenshotResult | undefined
-  /** Frames handed to the screenshot writer, in order. */
-  readonly screenshots: readonly { rows: readonly string[]; width: number }[]
-  /** Screenshot outcomes the section reported from the icon. */
-  readonly shotNotifies: readonly DuckScreenshotResult[]
-  readonly mouse: TestRendererSetup["mockMouse"]
-  /** Form events for the mounted session unless another session is passed. */
-  readonly formCreated: (id: string, sessionID?: string) => void
-  readonly formReplied: (id: string, sessionID?: string) => void
-  readonly formCancelled: (id: string, sessionID?: string) => void
-  /** Paints one frame and returns it. */
-  readonly frame: () => Promise<string>
-  /** The same frame with colours, for checking what a row was drawn in. */
-  readonly spans: () => ReturnType<TestRendererSetup["captureSpans"]>
-  /** Advances the manual clock, paints the single frame it produces, returns it. */
-  readonly advance: (ms: number) => Promise<string>
-  /** Paints `frames` frames of `msPerFrame` each, returns the last one. */
-  readonly tick: (frames: number, msPerFrame?: number) => Promise<string>
-  /** Removes the section from the tree, which runs its `onCleanup`. */
-  readonly unmount: () => Promise<void>
-  readonly dispose: () => Promise<void>
-}
-
-/**
- * Renders the section on a manual clock.
- *
- * The renderer is built before the tree is mounted, because OpenCode's JSX
- * transform — Bun's, which is not Solid-aware — evaluates prop values once: a
- * renderer handed over after mounting would arrive as `undefined` and stay
- * frozen there. The section's own inputs follow the same rule: `data` stands in
- * for the event source the component subscribes to, and `schedule` hands it the
- * manual clock so a tick does not have to wait for real time.
- */
-interface MountOptions {
-  width?: number
-  running?: boolean
-  swimSpeed?: number
-  silent?: boolean
-  sprites?: DuckSprites
-  bubbleText?: string
-  joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
-  /** Enables the copy icon; its return value is the clipboard's answer. */
-  copy?: (text: string) => boolean
-  /** Enables the screenshot icon; its return value is the writer's answer. */
-  screenshot?: (frame: { rows: readonly string[]; width: number }) => DuckScreenshotResult
-  /** Makes the 1/50 cow roll deterministic in a test. */
-  random?: () => number
-  sessionID?: string
-  pendingForms?: readonly PendingForm[]
-  /**
-   * When false, the first `form.list` call returns `undefined`, so the section
-   * has to call `sync` and read the list again.
-   */
-  formsReady?: boolean
-  /**
-   * State shared between mounts. Passing one is what a rebuilt sidebar does;
-   * leaving it out gives every mount its own fresh duck.
-   */
-  states?: DuckStates
-}
-
-/**
- * Harnesses that are still holding a renderer. `dispose()` removes its own
- * harness, and `afterEach` closes anything a test forgot, so a forgotten
- * teardown cannot leak a `TerminalConsoleCache` listener into the next test.
- */
-const liveHarnesses = new Set<Harness>()
-
-afterEach(async () => {
-  for (const harness of [...liveHarnesses]) await harness.dispose()
-})
-
-async function mount(options: MountOptions = {}): Promise<Harness> {
-  const clock = new ManualClock()
-  const handlers = new Map<string, (event: unknown) => void>()
-  const [session, setSession] = createSignal(options.sessionID ?? SESSION)
-  const forms = new Map<string, { id: string; sessionID: string }[]>()
-  for (const form of options.pendingForms ?? []) {
-    const sessionID = form.sessionID ?? session()
-    const list = forms.get(sessionID) ?? []
-    list.push({ id: form.id, sessionID })
-    forms.set(sessionID, list)
-  }
-  let formsReady = options.formsReady ?? true
-  let setRunning = (_value: boolean) => {}
-  let activeTimers = 0
-  let handle: DuckHandle | undefined
-  const copies: string[] = []
-  const notifies: ("copied" | "failed")[] = []
-  const screenshots: { rows: readonly string[]; width: number }[] = []
-  const shotNotifies: DuckScreenshotResult[] = []
-
-  const emit = (type: string, event: unknown) => handlers.get(type)?.(event)
-  const removeForm = (id: string, sessionID: string) => {
-    const list = forms.get(sessionID) ?? []
-    forms.set(sessionID, list.filter((form) => form.id !== id))
-  }
-  const formCreated = (id: string, sessionID = session()) => {
-    const list = forms.get(sessionID) ?? []
-    if (!list.some((form) => form.id === id)) list.push({ id, sessionID })
-    forms.set(sessionID, list)
-    emit("form.created", { data: { form: { id, sessionID, title: "Question", fields: [] } } })
-  }
-  const formReplied = (id: string, sessionID = session()) => {
-    removeForm(id, sessionID)
-    emit("form.replied", { data: { id, sessionID, answer: {} } })
-  }
-  const formCancelled = (id: string, sessionID = session()) => {
-    removeForm(id, sessionID)
-    emit("form.cancelled", { data: { id, sessionID } })
-  }
-
-  const setup = await createTestRenderer({ width: options.width ?? PANEL_WIDTH, height: 12, clock })
-  const [mounted, setMounted] = createSignal(true)
-  await render(
-    () => {
-      const data = {
-        on: (type: string, handler: (event: unknown) => void) => {
-          handlers.set(type, handler)
-          return () => handlers.delete(type)
-        },
-        session: {
-          form: {
-            list: (sessionID: string) => (formsReady ? (forms.get(sessionID) ?? []) : undefined),
-            sync: async (_sessionID: string) => {
-              formsReady = true
-            },
-          },
-        },
-      } as unknown as Data
-      setRunning = (value: boolean) => {
-        handlers.get("session.execution.started")?.({ data: { sessionID: session() } })
-        if (!value) handlers.get("session.execution.succeeded")?.({ data: { sessionID: session() } })
-      }
-      // `Show` is created manually because Bun's JSX transform evaluates props
-      // once: a getter is the only way to make the conditional reactive. It
-      // gives the tests a real unmount path, which disposing the renderer does
-      // not run under Bun's server build of Solid.
-      return createComponent(Conditional, {
-        keyed: false,
-        get when() {
-          return mounted()
-        },
-        get children() {
-          return (_shown: boolean) =>
-            // The section is created by hand for the same reason: the session
-            // id has to be a getter, so the tests can switch the session the
-            // way a host that re-renders the sidebar would.
-            createComponent(Ducksay, {
-              primary: PRIMARY,
-              renderer: setup.renderer,
-              swimSpeed: options.swimSpeed ?? DEFAULT_SWIM_SPEED,
-              silent: options.silent,
-              data,
-              get sessionID() {
-                return session()
-              },
-              isRunning: () => options.running === true,
-              schedule: (tick: () => void, ms: number) => {
-                activeTimers += 1
-                const handle = clock.setInterval(tick, ms)
-                return () => {
-                  clock.clearInterval(handle)
-                  activeTimers -= 1
-                }
-              },
-              sprites: options.sprites,
-              bubbleText: options.bubbleText,
-              joke: options.joke,
-              copy: options.copy === undefined
-                ? undefined
-                : (text: string) => {
-                    copies.push(text)
-                    return options.copy!(text)
-                  },
-              notify: (result) => notifies.push(result),
-              screenshot: options.screenshot === undefined
-                ? undefined
-                : (frame) => {
-                    screenshots.push(frame)
-                    return options.screenshot!(frame)
-                  },
-              notifyScreenshot: (result) => shotNotifies.push(result),
-              muted: MUTED,
-              random: options.random,
-              states: options.states,
-              expose: (next) => {
-                handle = next
-              },
-            })
-        },
-      })
-    },
-    setup.renderer,
-  )
-
-  const frame = async () => {
-    await setup.renderOnce()
-    return setup.captureCharFrame()
-  }
-  await frame()
-
-  // The duck advances on a timer, so time is moved a tick at a time: one step
-  // of the clock is one tick of the animation, as it would be in the terminal.
-  const advance = async (ms: number) => {
-    let left = ms
-    while (left > 0) {
-      const step = Math.min(TICK_MS, left)
-      clock.advance(step)
-      left -= step
-    }
-    return frame()
-  }
-
-  const harness: Harness = {
-    renderer: setup.renderer,
-    spans: () => setup.captureSpans(),
-    activeTimers: () => activeTimers,
-    liveRequests: () => setup.renderer.liveRequestCount,
-    setRunning,
-    setSession,
-    emit,
-    duck: (text) => handle?.duck(text),
-    handleSessionID: () => handle?.sessionID,
-    copy: () => handle?.copy(),
-    copies,
-    notifies,
-    screenshot: () => handle?.screenshot(),
-    screenshots,
-    shotNotifies,
-    mouse: setup.mockMouse,
-    formCreated,
-    formReplied,
-    formCancelled,
-    frame,
-    advance,
-    // Frames of 100 ms, which is the pace a real frame loop would deliver at
-    // low frame rates and leaves the duck one column per frame at the default
-    // speed. Jumping the clock in one go would not be the same thing: a single
-    // frame never carries the duck further than its catch-up budget.
-    tick: async (frames: number, msPerFrame = 100) => {
-      let captured = ""
-      for (let index = 0; index < frames; index += 1) captured = await advance(msPerFrame)
-      return captured
-    },
-    unmount: async () => {
-      setMounted(false)
-      await frame()
-    },
-    dispose: async () => {
-      if (!liveHarnesses.delete(harness)) return
-      await setup.dispose()
-    },
-  }
-  liveHarnesses.add(harness)
-  return harness
-}
-
-/**
- * Tears the section down and mounts a fresh one over the same state store,
- * which is what OpenCode does when it rebuilds the sidebar for another session
- * and then comes back.
- */
-async function rebuild(previous: Harness, options: MountOptions): Promise<Harness> {
-  await previous.unmount()
-  await previous.dispose()
-  return mount(options)
 }
 
 describe("Ducksay section", () => {
