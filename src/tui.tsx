@@ -41,7 +41,7 @@ import {
 } from "./options.ts"
 import { ScreenshotNamesExhaustedError, ScreenshotSaveError, saveScreenshot } from "./screenshot.ts"
 import { startQuestionMarker, trackForms } from "./section/forms.ts"
-import { createFeedback } from "./section/icons.ts"
+import { createFeedback, sanitizeClipboardText } from "./section/icons.ts"
 import { createJokeRunner, startSpeechTimers, SILENT_REPLY } from "./section/joke.ts"
 import { composeRowsInto } from "./section/paint.ts"
 import { defaultSchedule, type Schedule } from "./section/schedule.ts"
@@ -427,7 +427,7 @@ export function Ducksay(props: {
   const copyJoke = (): DuckCopyResult => {
     if (!canCopy()) return "empty"
     try {
-      const accepted = props.copy?.(COPY_PREFIX + jokeText().trim() + COPY_SUFFIX)
+      const accepted = props.copy?.(sanitizeClipboardText(COPY_PREFIX + jokeText().trim() + COPY_SUFFIX))
       if (accepted !== true) {
         copyFeedback.clear()
         return "failed"
@@ -578,6 +578,11 @@ export function Ducksay(props: {
       if (typeof event.created === "number") {
         if (event.created < latestAt) return
         latestAt = event.created
+      } else if (latestAt !== Number.NEGATIVE_INFINITY) {
+        // Once the host supplies timestamps, an untimed event is treated as
+        // older: a late `session.status` without `created` must not restart a
+        // turn that a timestamped completion already ended.
+        return
       }
       set(value)
     }

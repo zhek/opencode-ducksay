@@ -67,7 +67,8 @@ Turns the duck's speech off.
 | `false` | The duck speaks |
 | `true` | The duck is silent: no bubble, no text, no request |
 | the string `"true"`, in any case and with surrounding spaces | Read as `true` |
-| `0`, `"false"`, another word, an object | Speech stays on; a typo cannot silence the duck by accident |
+| the string `"false"`, in any case and with surrounding spaces | Read as `false` |
+| `0`, another word, an object | Speech stays on; the invalid value is reported in the diagnostic log |
 
 To get a duck that neither moves nor speaks, combine both options: `{ "swimSpeed": 0, "silent": true }`.
 

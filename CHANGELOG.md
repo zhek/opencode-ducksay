@@ -6,6 +6,9 @@
 
 - A keycap emoji such as `1️⃣` in a model answer no longer leaves its base digit in the joke; the whole character is
   removed.
+- A late session status without a timestamp no longer restarts a turn that has already finished.
+- Copying a joke now strips control characters and keeps the copied text within 4096 characters.
+- An invalid `silent` value is now reported in the diagnostic log instead of being silently treated as speech.
 
 ## [1.6.0] — 2026-11-08
 

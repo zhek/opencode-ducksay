@@ -294,6 +294,15 @@ describe("copy icon", () => {
     expect(harness.copies[0]!.match(/\(opencode-ducksay\)/g)).toHaveLength(1)
   })
 
+  test("copies a sanitized single line", async () => {
+    const { harness } = await rest({ copy: () => true, bubbleText: "a\u0000b\n c" })
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual([`${COPY_PREFIX}a b c${COPY_SUFFIX}`])
+  })
+
   test("right click does not copy", async () => {
     const { harness } = await rest({ copy: () => true })
     await clickIcon(harness, 2)
@@ -756,6 +765,31 @@ describe("swimming", () => {
     const dockedColumn = columnOf(docked)
     expect([0, RIGHT_EDGE]).toContain(dockedColumn)
     expect(columnOf(await harness.tick(5))).toBe(dockedColumn)
+  })
+
+  test("an untimed status does not undo a finished turn once timestamps are seen", async () => {
+    const harness = await mount({ running: true })
+    expect(columnOf(await harness.advance(COLUMN_MS * 5))).toBeGreaterThan(0)
+
+    harness.emit("session.execution.succeeded", { data: { sessionID: SESSION }, created: 200 })
+    harness.emit("session.status", {
+      data: { sessionID: SESSION, status: { type: "busy" } },
+    })
+
+    const docked = await harness.tick(RIGHT_EDGE + 2)
+    const dockedColumn = columnOf(docked)
+    expect([0, RIGHT_EDGE]).toContain(dockedColumn)
+    expect(columnOf(await harness.tick(5))).toBe(dockedColumn)
+  })
+
+  test("an untimed event still applies before any timestamp", async () => {
+    const harness = await mount({ running: false })
+    const start = columnOf(await harness.frame())
+
+    harness.emit("session.execution.started", { data: { sessionID: SESSION } })
+    const later = columnOf(await harness.advance(COLUMN_MS * 5))
+
+    expect(later).toBeGreaterThan(start)
   })
 
   test("a late start does not undo a finished turn", async () => {

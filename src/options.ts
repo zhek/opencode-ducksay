@@ -20,7 +20,7 @@ export const DEFAULT_CONTEXT_DEPTH = 2
 export const MAX_CONTEXT_DEPTH = 10
 
 /** The options whose invalid values are reported in the log. */
-export type ConfigOption = "swimSpeed" | "llmTimeout" | "llmContextDepth" | "llmModel"
+export type ConfigOption = "swimSpeed" | "llmTimeout" | "llmContextDepth" | "llmModel" | "silent"
 
 /** Why a value was not used as written. */
 export type ConfigReason = "fallback" | "capped" | "unusable"
@@ -246,10 +246,28 @@ function readLlmModel(options: PluginOptions | undefined): Reading<LlmModelChoic
  * by accident, which is the same defensive rule the numeric options follow.
  */
 export function resolveSilent(options: PluginOptions | undefined): boolean {
+  return readSilent(options).value
+}
+
+function readSilent(options: PluginOptions | undefined): Reading<boolean> {
   const value = options?.silent
-  if (typeof value === "boolean") return value
-  if (typeof value === "string") return value.trim().toLowerCase() === "true"
-  return false
+  if (value === undefined || value === null) return { value: false }
+  if (typeof value === "boolean") return { value }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === "true") return { value: true }
+    if (normalized === "false") return { value: false }
+  }
+  return {
+    value: false,
+    diagnostic: {
+      option: "silent",
+      value,
+      effective: null,
+      reason: "fallback",
+      message: "The silent option is invalid.",
+    },
+  }
 }
 
 /** One diagnostic per option whose value was not used as written. */
@@ -259,6 +277,7 @@ export function diagnoseOptions(options: PluginOptions | undefined): ConfigDiagn
     readLlmTimeout(options),
     readContextDepth(options),
     readLlmModel(options),
+    readSilent(options),
   ]
   return readings.flatMap((reading) => (reading.diagnostic === undefined ? [] : [reading.diagnostic]))
 }

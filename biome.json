@@ -60,6 +60,16 @@
       }
     },
     {
+      "includes": ["src/section/icons.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noControlCharactersInRegex": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/tui.tsx"],
       "linter": {
         "rules": {
