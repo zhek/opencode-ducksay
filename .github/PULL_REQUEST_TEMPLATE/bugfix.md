@@ -16,6 +16,7 @@ Branch: `fix/<slug>`
 - [ ] The test and the fix are in the same commit.
 - [ ] `bun test` passes.
 - [ ] `bunx tsc --noEmit` passes.
+- [ ] `bun run lint` passes.
 - [ ] If the fix is user-visible, it is under `### Fixed` in `## Unreleased` of `CHANGELOG.md`.
 - [ ] `version` in `package.json` is unchanged; only a release PR moves it.
 - [ ] User-facing documentation is updated in both languages: `README.md` with `README.ru.md`, and every changed `docs/*.md` with its `docs/*.ru.md` counterpart.

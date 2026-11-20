@@ -7,6 +7,7 @@
 - [ ] This does not add new functionality; a feature goes through an OpenSpec change with the feature template.
 - [ ] `bun test` passes.
 - [ ] `bunx tsc --noEmit` passes.
+- [ ] `bun run lint` passes.
 - [ ] A code change comes with automated tests; a refactor keeps the existing tests green and does not change behaviour.
 - [ ] `CHANGELOG.md` and `version` in `package.json` are untouched: `chore`, `docs`, `refactor` and test work have nothing for the user to notice.
 - [ ] Documentation changes update English and Russian together: `README.md` with `README.ru.md`, and every changed `docs/*.md` with its `docs/*.ru.md` counterpart.
