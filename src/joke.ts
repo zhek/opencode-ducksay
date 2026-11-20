@@ -17,6 +17,24 @@ const MESSAGE_LIMIT = 500
 /** The bubble field holds 125 characters; a longer answer would be cut there. */
 const JOKE_LIMIT = 125
 
+/** The smallest tail read from a session, even for a shallow context depth. */
+export const MESSAGE_SCAN_MIN = 32
+
+/**
+ * Keeps only the tail of the session history that can still contribute.
+ *
+ * Depth is per role, so `depth * 2` messages cover both roles; the margin lets
+ * a run of one role still leave the other side enough recent messages. This
+ * bounds the work for a long session without changing the selected context.
+ */
+export function limitJokeMessages(
+  messages: readonly SessionMessageInfo[],
+  depth: number,
+): readonly SessionMessageInfo[] {
+  const scan = Math.max(MESSAGE_SCAN_MIN, depth * 2 + 8)
+  return messages.length <= scan ? messages : messages.slice(-scan)
+}
+
 export interface JokeMessage {
   readonly role: "user" | "assistant"
   readonly text: string

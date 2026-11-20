@@ -139,6 +139,8 @@ export function listLogFiles(directory: string): LogFile[] {
 
 /** One JSON line, or `undefined` when even a truncated line would not fit. */
 export function formatLogLine(input: LogLineInput, now: Date, pid: number): string | undefined {
+  // Every string is bounded before this point, so JSON.stringify only sees a
+  // record proportional to the line budget; byteLength is measured once.
   const record: Record<string, unknown> = {
     v: LOG_SCHEMA_VERSION,
     time: formatLogTime(now),
@@ -162,19 +164,37 @@ export function formatLogLine(input: LogLineInput, now: Date, pid: number): stri
   return Buffer.byteLength(line, "utf8") > LOG_MAX_LINE_BYTES ? undefined : line
 }
 
+interface RotationState {
+  readonly date: string
+  readonly path: string
+  size: number
+}
+
+/** The current file per logs folder, so a line does not rescan the directory. */
+const rotationCache = new Map<string, RotationState>()
+
 /** Appends one prepared line to the project's log, rotating when needed. */
 export function appendLogLine(directory: string, line: string, now: Date): void {
+  let logs: string | undefined
   try {
     const prepared = ensureDucksayFolder(directory)
-    const logs = join(prepared.folder, "logs")
+    logs = join(prepared.folder, "logs")
     mkdirSync(logs, { recursive: true })
 
     const date = formatLogDate(now)
     const bytes = Buffer.byteLength(line, "utf8")
+    const cached = rotationCache.get(logs)
+    if (cached !== undefined && cached.date === date && cached.size + bytes <= LOG_MAX_FILE_BYTES) {
+      appendFileSync(cached.path, line, "utf8")
+      cached.size += bytes
+      return
+    }
+
     const files = listLogFiles(logs)
     const target = files.find((file) => file.date === date && file.size + bytes <= LOG_MAX_FILE_BYTES)
     if (target !== undefined) {
       appendFileSync(target.path, line, "utf8")
+      rotationCache.set(logs, { date, path: target.path, size: target.size + bytes })
       return
     }
 
@@ -193,8 +213,11 @@ export function appendLogLine(directory: string, line: string, now: Date): void 
       }
     }
 
-    appendFileSync(join(logs, formatLogFileName(date, index)), line, "utf8")
+    const path = join(logs, formatLogFileName(date, index))
+    appendFileSync(path, line, "utf8")
+    rotationCache.set(logs, { date, path, size: bytes })
   } catch {
+    if (logs !== undefined) rotationCache.delete(logs)
     // A log line must never break the duck.
   }
 }
