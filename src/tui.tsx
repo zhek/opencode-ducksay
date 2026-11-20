@@ -9,27 +9,10 @@ import {
   createMemo,
   createSignal,
   onCleanup,
-  untrack,
 } from "solid-js"
-import {
-  BUBBLE_CONTENT_ROWS,
-  BUBBLE_WIDTH,
-  bubbleRows,
-  wrapBubbleText,
-  type BubbleSide,
-} from "./bubble.ts"
-import {
-  advanceCow,
-  COW_CHANCE,
-  cowEmergence,
-  cowFrame,
-  COW_TONGUE_ROW,
-  COW_WIDTH,
-  crossedMidline,
-} from "./cow.ts"
+import { BUBBLE_CONTENT_ROWS } from "./bubble.ts"
 import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
 import {
-  appendExchange,
   createDuckState,
   createDuckStates,
   type DuckState,
@@ -40,13 +23,10 @@ import {
 import {
   clipUserText,
   createJokeGenerator,
-  createJokeRequest,
   type JokeInput,
-  type JokeRequest,
   type JokeSource,
 } from "./joke.ts"
-import { laneLimit, msPerColumn, moveTowardsEdge } from "./lane.ts"
-import { BEAK_ROW, BODY_ROW, HEAD_ROW, LOWER_WATER_ROW, QUESTION_ROW } from "./layout.ts"
+import { laneLimit } from "./lane.ts"
 import { createLogger, type Logger } from "./log.ts"
 import { logConfigDiagnostic, logJokeFailure } from "./log-events.ts"
 import {
@@ -59,26 +39,20 @@ import {
   resolveSwimSpeed,
 } from "./options.ts"
 import { ScreenshotNamesExhaustedError, ScreenshotSaveError, saveScreenshot } from "./screenshot.ts"
-import { QUESTION_FRAMES, QUESTION_FRAME_MS, questionColumn } from "./question.ts"
+import { startQuestionMarker, trackForms } from "./section/forms.ts"
+import { createFeedback } from "./section/icons.ts"
+import { createJokeRunner, startSpeechTimers, SILENT_REPLY } from "./section/joke.ts"
+import { composeRowsInto } from "./section/paint.ts"
+import { defaultSchedule, type Schedule } from "./section/schedule.ts"
+import { startSwim } from "./section/swim.ts"
 import {
   THINKING_STEPS,
-  THINK_FRAME_MS,
-  WORD_FRAME_MS,
   beakOpen as beakOpenAt,
   bubbleWords,
-  holdsAfter,
   revealText,
   thinkingText,
 } from "./thinking.ts"
-import {
-  COPY_FEEDBACK_MS,
-  DEFAULT_BUBBLE_TEXT,
-  MAX_COLUMNS_PER_TICK,
-  SCREENSHOT_FEEDBACK_MS,
-  TICK_MS,
-  WATER_WIDTH,
-} from "./timing.ts"
-import { WAVE_PERIOD, hasTilde, waveSpeed } from "./wave.ts"
+import { COPY_FEEDBACK_MS, DEFAULT_BUBBLE_TEXT, SCREENSHOT_FEEDBACK_MS } from "./timing.ts"
 
 export interface DuckSprites {
   readonly right: readonly string[]
@@ -93,21 +67,6 @@ const DEFAULT_SPRITES: DuckSprites = {
   rightOpen: DUCK_RIGHT_OPEN,
   leftOpen: DUCK_LEFT_OPEN,
 }
-
-/**
- * Starts a heartbeat and returns its stop. The default is a plain interval; a
- * test hands in the renderer's manual clock so the swim can be stepped without
- * waiting for real time.
- */
-export type Schedule = (tick: () => void, ms: number) => () => void
-
-const defaultSchedule: Schedule = (tick, ms) => {
-  const handle = setInterval(tick, ms)
-  return () => clearInterval(handle)
-}
-
-/** The user side recorded for a `/duck` without text. */
-const SILENT_REPLY = "<silent>"
 
 /** Shown when the duck cannot take a command, with its beak wide open. */
 const BUSY_TOAST = ">(o ) The duck is mid-quack. Try later."
@@ -268,25 +227,37 @@ export function Ducksay(props: {
   const [askedForms, setAskedForms] = createSignal<ReadonlySet<string>>(new Set())
   // The marker frame starts at `?` and advances while at least one form waits.
   const [questionFrame, setQuestionFrame] = createSignal(0)
-  // The icon's two pieces of view state: whether it shows the confirmation,
-  // and whether the pointer is over it. Both are written imperatively below.
-  const [copied, setCopied] = createSignal(false)
+  // The icon's hover state. The confirmation lives in its own feedback timer.
   const [hovered, setHovered] = createSignal(false)
   // The screenshot icon keeps its own confirmation and hover state, so the two
   // icons can flash independently without sharing a timer.
-  const [shotSaved, setShotSaved] = createSignal(false)
   const [shotHovered, setShotHovered] = createSignal(false)
   // Refs are assigned after the first effect pass under Bun's JSX transform, so
   // this signal makes the icon effect run again once both nodes exist.
   const [iconReady, setIconReady] = createSignal(false)
   const [shotReady, setShotReady] = createSignal(false)
-  let stopCopyFeedback: (() => void) | undefined
-  let stopShotFeedback: (() => void) | undefined
   let iconBox: BoxRenderable | undefined
   let iconText: TextRenderable | undefined
   let shotBox: BoxRenderable | undefined
   let shotText: TextRenderable | undefined
   let gapBox: BoxRenderable | undefined
+
+  // Several effects can react to one change; ask the renderer for one frame per
+  // microtask instead of one per effect.
+  let renderQueued = false
+  const requestRender = () => {
+    if (renderQueued) return
+    renderQueued = true
+    queueMicrotask(() => {
+      renderQueued = false
+      props.renderer?.requestRender()
+    })
+  }
+
+  const schedule = props.schedule ?? defaultSchedule
+  const copyFeedback = createFeedback(COPY_FEEDBACK_MS, schedule, requestRender)
+  const shotFeedback = createFeedback(SCREENSHOT_FEEDBACK_MS, schedule, requestRender)
+
   /**
    * True while the displayed session has a pending form. It is a memo so the
    * marker timer and the rest timers only restart when the state flips, not
@@ -294,58 +265,12 @@ export function Ducksay(props: {
    */
   const frozen = createMemo(() => askedForms().size > 0)
 
-  const clearCopyFeedback = () => {
-    stopCopyFeedback?.()
-    stopCopyFeedback = undefined
-    setCopied(false)
-  }
-
-  /**
-   * Starts the 1200 ms confirmation. The timer clears itself on its first tick,
-   * so the icon does not depend on a second repaint to return to `[copy]`.
-   */
-  const startCopyFeedback = () => {
-    clearCopyFeedback()
-    setCopied(true)
-    let stop: (() => void) | undefined
-    stop = (props.schedule ?? defaultSchedule)(() => {
-      stop?.()
-      stop = undefined
-      stopCopyFeedback = undefined
-      setCopied(false)
-      props.renderer?.requestRender()
-    }, COPY_FEEDBACK_MS)
-    stopCopyFeedback = stop
-  }
-
-  const clearShotFeedback = () => {
-    stopShotFeedback?.()
-    stopShotFeedback = undefined
-    setShotSaved(false)
-  }
-
-  /** The same 1200 ms confirmation as the copy icon, with its own timer. */
-  const startShotFeedback = () => {
-    clearShotFeedback()
-    setShotSaved(true)
-    let stop: (() => void) | undefined
-    stop = (props.schedule ?? defaultSchedule)(() => {
-      stop?.()
-      stop = undefined
-      stopShotFeedback = undefined
-      setShotSaved(false)
-      props.renderer?.requestRender()
-    }, SCREENSHOT_FEEDBACK_MS)
-    stopShotFeedback = stop
-  }
-
   // The lane is measured after the rows are built. Reading its width through a
   // signal means the first real measurement releases a bubble that was waiting
   // for the room, and a resize is followed without a special case.
   const [laneWidth, setLaneWidth] = createSignal(0)
   let laneBox: BoxRenderable | undefined
   let lastBusy = busy()
-  let request: JokeRequest | undefined
   const lines: (TextRenderable | undefined)[] = []
   /**
    * The nine rows as they were last painted. The screenshot icon hands them to
@@ -353,11 +278,37 @@ export function Ducksay(props: {
    * recomposition that could disagree with the screen.
    */
   let paintedRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
+  let workRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
 
-  const cancelJoke = (reason: "turn" | "unmount" = "turn") => {
-    request?.cancel(reason)
-    request = undefined
-  }
+  const sprites = () => props.sprites ?? DEFAULT_SPRITES
+  const artWidth = createMemo(() => {
+    const { right, left, rightOpen, leftOpen } = sprites()
+    return Math.max(
+      0,
+      ...right.map((line) => line.length),
+      ...left.map((line) => line.length),
+      ...rightOpen.map((line) => line.length),
+      ...leftOpen.map((line) => line.length),
+    )
+  })
+  /**
+   * The box the section is laid out in. It is measured rather than derived from
+   * OpenCode's panel constants, so the duck keeps working whatever width the
+   * host gives it. `flexGrow` makes the box span the lane; without it the box
+   * shrinks to the art and there is no room to swim at all.
+   */
+  const limit = () => laneLimit(laneWidth(), artWidth())
+
+  const jokeRunner = createJokeRunner({
+    state: () => state,
+    joke: props.joke,
+    silent: props.silent === true,
+    limit: () => limit(),
+    setSpeech,
+    setJokeText,
+    setShown,
+  })
+  const cancelJoke = (reason: "turn" | "unmount" = "turn") => jokeRunner.cancel(reason)
 
   /**
    * Copies the reactive view back into the snapshot. A live request leaves
@@ -387,8 +338,8 @@ export function Ducksay(props: {
     if (nextSessionID === activeSessionID) return
     const previousSessionID = activeSessionID
     activeSessionID = nextSessionID
-    clearCopyFeedback()
-    clearShotFeedback()
+    copyFeedback.clear()
+    shotFeedback.clear()
 
     if (previousSessionID !== undefined && props.states !== undefined) {
       writeSnapshot()
@@ -422,10 +373,9 @@ export function Ducksay(props: {
     // headings differ. The snapshot swap would then wake no effect, so paint
     // the new pose explicitly.
     paint()
-    props.renderer?.requestRender()
+    requestRender()
   })
 
-  const sprites = () => props.sprites ?? DEFAULT_SPRITES
   /**
    * Whether this lane may speak at all. `silent` is the explicit switch; a lane
    * narrower than the art has no room for a bubble and stays quiet for that
@@ -478,14 +428,14 @@ export function Ducksay(props: {
     try {
       const accepted = props.copy?.(COPY_PREFIX + jokeText().trim() + COPY_SUFFIX)
       if (accepted !== true) {
-        clearCopyFeedback()
+        copyFeedback.clear()
         return "failed"
       }
     } catch {
-      clearCopyFeedback()
+      copyFeedback.clear()
       return "failed"
     }
-    startCopyFeedback()
+    copyFeedback.start()
     return "copied"
   }
   /**
@@ -508,8 +458,8 @@ export function Ducksay(props: {
     } catch {
       result = "failed"
     }
-    if (result === "saved") startShotFeedback()
-    else clearShotFeedback()
+    if (result === "saved") shotFeedback.start()
+    else shotFeedback.clear()
     return result
   }
 
@@ -518,31 +468,13 @@ export function Ducksay(props: {
     if (state.direction === 1) return beakOpen() ? set.rightOpen : set.right
     return beakOpen() ? set.leftOpen : set.left
   }
-  const artWidth = () => {
-    const { right, left, rightOpen, leftOpen } = sprites()
-    return Math.max(
-      0,
-      ...right.map((line) => line.length),
-      ...left.map((line) => line.length),
-      ...rightOpen.map((line) => line.length),
-      ...leftOpen.map((line) => line.length),
-    )
-  }
-
-  /**
-   * The box the section is laid out in. It is measured rather than derived from
-   * OpenCode's panel constants, so the duck keeps working whatever width the
-   * host gives it. `flexGrow` makes the box span the lane; without it the box
-   * shrinks to the art and there is no room to swim at all.
-   */
-  const limit = () => laneLimit(laneWidth(), artWidth())
 
   // The icon is static JSX; Solid signals write its content, colour and
   // visibility. Hiding it with `visible` keeps the heading row one line high.
   createEffect(() => {
     const ready = iconReady()
     const available = canCopy()
-    const done = copied()
+    const done = copyFeedback.active()
     const over = hovered()
     const shown = props.copy !== undefined && speechAllowed()
     if (ready && iconText !== undefined) {
@@ -552,7 +484,7 @@ export function Ducksay(props: {
     }
     if (iconBox !== undefined) iconBox.visible = shown
     if (gapBox !== undefined) gapBox.visible = shown
-    props.renderer?.requestRender()
+    requestRender()
   })
 
   // The screenshot icon is always lit while the lane can hold the duck: it has
@@ -560,7 +492,7 @@ export function Ducksay(props: {
   // hover weight are written the same imperative way as the copy icon's.
   createEffect(() => {
     const ready = shotReady()
-    const done = shotSaved()
+    const done = shotFeedback.active()
     const over = shotHovered()
     const available = canScreenshot()
     if (ready && shotText !== undefined) {
@@ -569,13 +501,13 @@ export function Ducksay(props: {
       shotText.attributes = available && over ? TextAttributes.BOLD : TextAttributes.NONE
     }
     if (shotBox !== undefined) shotBox.visible = available
-    props.renderer?.requestRender()
+    requestRender()
   })
 
   // Losing the joke, the bubble or the clipboard must not leave a stale `✓`.
   createEffect(() => {
-    if (!canCopy()) clearCopyFeedback()
-    if (!canScreenshot()) clearShotFeedback()
+    if (!canCopy()) copyFeedback.clear()
+    if (!canScreenshot()) shotFeedback.clear()
   })
 
   /**
@@ -593,111 +525,32 @@ export function Ducksay(props: {
   }
 
   /**
-   * One row of water.
-   *
-   * Generated wider than any sidebar and let `wrapMode="none"` cut it at the
-   * lane's edge, rather than measured. Measuring would mean reading the lane
-   * box, and the row has to be drawable before that box has a width — the refs
-   * that assign it run after the refs of the rows inside it — so a measured
-   * row would paint itself empty once and never again in `rest`, where no tick
-   * follows to correct it.
-   */
-  const waterLine = (row: number) => {
-    let line = ""
-    for (let cell = 0; cell < WATER_WIDTH; cell++) line += hasTilde(cell, state.wavePhase, row) ? "~" : " "
-    return line
-  }
-
-  /**
-   * Lays the duck's part of a row over the water that shares it.
-   *
-   * The art goes in at the duck's column, so it is given without the indent —
-   * passing an already indented sprite would shift it by `column` a second time
-   * and push it off the row entirely once the duck left the left edge.
-   */
-  const overWater = (water: string, sprite: string) =>
-    water.slice(0, state.column) + sprite + water.slice(state.column + sprite.length)
-
-  /**
-   * Puts a bubble segment on `row` at column `at`.
-   *
-   * A segment that starts left of the lane is cut at its left edge, the same
-   * way the art and water rows are cut by `wrapMode="none"`; the rest of the
-   * row, including the duck, is left alone.
-   */
-  const overlay = (row: string, segment: string, at: number) => {
-    if (at < 0) {
-      const visible = segment.slice(-at)
-      return visible + row.slice(visible.length)
-    }
-    const padded = row.padEnd(at + segment.length, " ")
-    return padded.slice(0, at) + segment + padded.slice(at + segment.length)
-  }
-
-  /**
    * Draws the current sprite at the current column, with the water under it,
    * and lays the bubble over the rows beside the duck when it is showing.
    *
-   * The upper water row shares a row with the duck's last art line: that is what
-   * puts the duck in the water rather than above it, and it costs no blank row.
-   * The duck is drawn first so its glyphs win the columns it occupies, including
-   * the spaces inside its art. The bubble never overlaps it: 29 columns of
-   * bubble plus 8 of art is the 37-column lane, so the two sit side by side.
+   * Two buffers are swapped on every frame: the working array is cleared and
+   * refilled in place, and `paintedRows` keeps the frame the icon will hand to
+   * the screenshot writer without allocating a new array per paint.
    */
   const paint = () => {
-    const sprite = art()
-    const indent = " ".repeat(state.column)
-    // Every row is rebuilt on every paint, which is also what clears a bubble
-    // that has just gone away; the reserve above the duck stays blank otherwise.
-    const rows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
-
-    // The cow is drawn first, so the duck stays in front if a sprite ever
-    // reaches the reserve. It is pinned to the right wall: `e` columns are
-    // visible, and its left edge moves left as it comes out.
-    if (mode() !== "rest" && state.cow !== undefined) {
-      const emergence = cowEmergence(state.cow.columns)
-      if (emergence > 0) {
-        const left = laneWidth() - emergence
-        // The mouth stays closed on the way out. The tongue appears only when
-        // the cow is fully out and stays through the hold and the return.
-        const tongue = state.cow.columns >= COW_WIDTH
-        for (const line of cowFrame(emergence, tongue)) {
-          const at = line.row === COW_TONGUE_ROW ? left + 1 : left
-          rows[line.row] = overlay(rows[line.row] ?? "", line.text, at)
-        }
-      }
-    }
-
-    rows[HEAD_ROW] = indent + (sprite[0] ?? "")
-    rows[BEAK_ROW] = indent + (sprite[1] ?? "")
-    rows[BODY_ROW] = overWater(waterLine(0), sprite[2] ?? "")
-    rows[LOWER_WATER_ROW] = waterLine(1)
-
-    if (bubbleVisible()) {
-      const side: BubbleSide = state.direction === 1 ? "right" : "left"
-      // The bubble hugs the beak: to the right of the duck when it faces right,
-      // ending at the duck's column when it faces left.
-      const at = state.direction === 1 ? state.column + artWidth() : state.column - BUBBLE_WIDTH
-      const segments = bubbleRows(wrapBubbleText(bubbleText()), side)
-      for (const [index, segment] of segments.entries()) {
-        if (segment !== undefined) rows[index] = overlay(rows[index] ?? "", segment, at)
-      }
-    }
-
-    // The marker is drawn after the bubble because a pending form hides the
-    // bubble; doing it last also keeps a stale bubble from covering it if the
-    // two ever coincide. It takes the art's colour, as every content row does.
-    if (frozen()) {
-      const glyph = QUESTION_FRAMES[questionFrame()] ?? QUESTION_FRAMES[0]
-      const at = questionColumn(state.column, state.direction)
-      rows[QUESTION_ROW] = overlay(rows[QUESTION_ROW] ?? "", glyph, at)
-    }
+    composeRowsInto(workRows, {
+      state,
+      mode: mode(),
+      frozen: frozen(),
+      questionFrame: questionFrame(),
+      sprite: art(),
+      laneWidth: laneWidth(),
+      artWidth: artWidth(),
+      bubbleVisible: bubbleVisible(),
+      bubbleText: bubbleText(),
+    })
 
     for (const [index, text] of lines.entries()) {
-      if (text !== undefined) text.content = rows[index] ?? ""
+      if (text !== undefined) text.content = workRows[index] ?? ""
     }
-    // Keep the frame the icon will hand to the screenshot writer.
-    paintedRows = rows
+    const previous = paintedRows
+    paintedRows = workRows
+    workRows = previous
   }
 
   /**
@@ -753,95 +606,11 @@ export function Ducksay(props: {
     })
   })
 
-  /**
-   * Form events follow the session the same way execution events do. Only the
-   * displayed session counts: `global` and another session's forms must not
-   * freeze the duck. Forms already open when the section mounts are read from
-   * the host, with a `sync` retry when the cache has not been filled yet.
-   */
-  createEffect(() => {
-    const data = props.data
-    const sessionID = props.sessionID
-    setAskedForms(new Set<string>())
-    if (data === undefined || sessionID === undefined) return
-
-    /**
-     * Adds or removes one form in the pending set without disturbing the
-     * others. A new set is returned only on an actual change, so repeated
-     * events do not wake every effect that reads the set.
-     */
-    const addAsked = (id: string) => {
-      setAskedForms((current) => {
-        if (current.has(id)) return current
-        const next = new Set(current)
-        next.add(id)
-        return next
-      })
-    }
-    /**
-     * Forms that closed while the list was being synced. They must not come
-     * back when the synced list arrives, or the duck would stay frozen over a
-     * form nobody is waiting for any more.
-     */
-    const closed = new Set<string>()
-    const removeAsked = (id: string) => {
-      closed.add(id)
-      setAskedForms((current) => {
-        if (!current.has(id)) return current
-        const next = new Set(current)
-        next.delete(id)
-        return next
-      })
-    }
-
-    const mine = (eventSessionID: string | undefined) => eventSessionID === sessionID
-    const stops = [
-      data.on("form.created", (event) => {
-        const form = event.data.form
-        if (!mine(form.sessionID)) return
-        closed.delete(form.id)
-        addAsked(form.id)
-      }),
-      data.on("form.replied", (event) => {
-        if (!mine(event.data.sessionID)) return
-        removeAsked(event.data.id)
-      }),
-      data.on("form.cancelled", (event) => {
-        if (!mine(event.data.sessionID)) return
-        removeAsked(event.data.id)
-      }),
-    ]
-
-    const forms = data.session?.form
-    if (forms !== undefined) {
-      const apply = (listed: readonly { id: string; sessionID?: string }[] | undefined) => {
-        if (props.sessionID !== sessionID || listed === undefined) return
-        setAskedForms((current) => {
-          const next = new Set<string>()
-          // The list is asked for one session, but the filter keeps the rule
-          // in one place: only a form of the displayed session is a question.
-          for (const form of listed) {
-            if (form.sessionID !== undefined && !mine(form.sessionID)) continue
-            if (!closed.has(form.id)) next.add(form.id)
-          }
-          for (const id of current) if (!closed.has(id)) next.add(id)
-          return next
-        })
-      }
-      const listed = forms.list(sessionID)
-      if (listed !== undefined) {
-        apply(listed)
-      } else {
-        void forms
-          .sync(sessionID)
-          .then(() => apply(forms.list(sessionID)))
-          .catch(() => {})
-      }
-    }
-
-    onCleanup(() => {
-      for (const stop of stops) stop()
-    })
+  trackForms({
+    data: () => props.data,
+    sessionID: () => props.sessionID,
+    currentSessionID: () => props.sessionID,
+    setAskedForms,
   })
 
   // Reading `busy` here is what makes the mode follow the session: a busy
@@ -858,7 +627,7 @@ export function Ducksay(props: {
       if (state.cow !== undefined) {
         state.cow = undefined
         paint()
-        props.renderer?.requestRender()
+        requestRender()
       }
       setMode(working ? "swim" : "rest")
       return
@@ -902,57 +671,6 @@ export function Ducksay(props: {
   })
 
   /**
-   * Starts the request for the turn that has just ended, or for a direct
-   * `/duck` call when `pendingReply` says so. A missing generator means the
-   * static `bubbleText` is all this section shows.
-   *
-   * Returns false when speech is not possible at all, so the command can report
-   * `busy` instead of leaving a reply stuck in the snapshot.
-   */
-  const startJoke = (): boolean => {
-    const joke = props.joke
-    if (joke === undefined || props.silent === true || limit() <= 0) return false
-    cancelJoke()
-    const reply = state.pendingReply
-    const input: JokeInput | undefined = reply === undefined
-      ? undefined
-      : { text: reply === SILENT_REPLY ? undefined : reply, dialogue: state.dialogue }
-    // The request is stored before the speech signal flips: `waiting` with no
-    // request is what starts a joke on a later mount, and the effect that
-    // watches it would otherwise start a second one from this very call.
-    const current = createJokeRequest(joke, input)
-    request = current
-    setSpeech("waiting")
-    setJokeText(DEFAULT_BUBBLE_TEXT)
-    // The dots keep their frame: a request that is repeated after the sidebar
-    // was rebuilt resumes the waiting bubble instead of going back to one dot.
-    // A new turn resets the frame when it starts.
-    setShown(0)
-    void current.result.then((text) => {
-      // A late answer from a cancelled request must not replace the bubble of
-      // the turn that replaced it.
-      if (request !== current) return
-      request = undefined
-      const answer = text !== undefined && text.trim() !== "" ? text : undefined
-      setJokeText(answer ?? DEFAULT_BUBBLE_TEXT)
-      // The first word is on screen in the same paint as the answer; the typing
-      // timer only has to fetch the words after it.
-      setShown(1)
-      setSpeech("ready")
-      // The fallback is not a joke the duck said, so only a real answer joins
-      // the dialogue. A missing reply marks the automatic joke after a turn.
-      if (answer !== undefined) {
-        state.dialogue = appendExchange(
-          state.dialogue,
-          reply === undefined ? { duck: answer } : { user: reply, duck: answer },
-        )
-      }
-      state.pendingReply = undefined
-    })
-    return true
-  }
-
-  /**
    * The `/duck` entry point. The checks mirror the states the section already
    * treats as busy: a running session, a dock in progress, a pending form, a
    * lane without room, or an answer still on its way.
@@ -961,10 +679,10 @@ export function Ducksay(props: {
     if (props.silent === true) return "muted"
     if (props.sessionID === undefined || limit() <= 0) return "busy"
     if (frozen() || busy() || mode() !== "rest") return "busy"
-    if (speech() === "waiting" && request !== undefined) return "busy"
+    if (speech() === "waiting" && jokeRunner.hasRequest()) return "busy"
     const reply = text === undefined || text.trim() === "" ? SILENT_REPLY : clipUserText(text)
     state.pendingReply = reply
-    if (!startJoke()) {
+    if (!jokeRunner.start()) {
       state.pendingReply = undefined
       return "busy"
     }
@@ -984,8 +702,8 @@ export function Ducksay(props: {
   })
   onCleanup(() => {
     props.expose?.(undefined)
-    clearCopyFeedback()
-    clearShotFeedback()
+    copyFeedback.clear()
+    shotFeedback.clear()
   })
 
   // A request belongs to the end of a turn, not to the rest pose: it starts
@@ -999,8 +717,8 @@ export function Ducksay(props: {
     const blocked = frozen()
     const allowed = speechAllowed()
     if (!waiting || working || blocked || !allowed) return
-    if (request !== undefined) return
-    startJoke()
+    if (jokeRunner.hasRequest()) return
+    jokeRunner.start()
   })
 
   // The signals are the reactive view; the snapshot is what a later mount
@@ -1030,175 +748,40 @@ export function Ducksay(props: {
     questionFrame()
     frozen()
     paint()
-    props.renderer?.requestRender()
+    requestRender()
   })
 
-  // The marker is the only thing moving while a form waits. It starts at `?`
-  // when the first form arrives and keeps its own phase until the last form
-  // closes; `frozen` is a memo, so a second form does not restart the cycle.
-  createEffect(() => {
-    if (!frozen() || props.renderer === undefined) return
-    setQuestionFrame(0)
-    const tick = () => setQuestionFrame((frame) => (frame + 1) % QUESTION_FRAMES.length)
-    const stop = (props.schedule ?? defaultSchedule)(tick, QUESTION_FRAME_MS)
-    onCleanup(stop)
+  startQuestionMarker({
+    frozen,
+    renderer: () => props.renderer,
+    schedule,
+    setQuestionFrame,
   })
 
-  // The waiting dots run only while the duck rests with an answer still on the
-  // way. `mode` and `speech` start and stop the effect; `dotsStep` is
-  // deliberately not read here: advancing it must not tear down and recreate
-  // the interval on every frame.
-  createEffect(() => {
-    const renderer = props.renderer
-    if (renderer === undefined || props.joke === undefined) return
-    if (!bubbleVisible() || speech() !== "waiting") return
-
-    const tick = () => setDotsStep((step) => (step + 1) % THINKING_STEPS.length)
-    const stop = (props.schedule ?? defaultSchedule)(tick, THINK_FRAME_MS)
-    onCleanup(stop)
+  startSpeechTimers({
+    renderer: () => props.renderer,
+    joke: props.joke,
+    bubbleVisible,
+    speech,
+    jokeText,
+    shown,
+    setDotsStep,
+    setShown,
+    schedule,
   })
 
-  // The joke is revealed one word per tick while the duck rests. The effect
-  // starts on the answer and stops itself on the last word, so a rest with the
-  // whole joke on screen holds no timer. `shown` is read through `untrack`:
-  // tracking it would tear down the interval on every word and lose the pause
-  // flag for punctuation.
-  createEffect(() => {
-    const renderer = props.renderer
-    if (renderer === undefined || props.joke === undefined) return
-    if (!bubbleVisible() || speech() !== "ready") return
-
-    const text = jokeText()
-    const words = bubbleWords(text)
-    const total = words.length
-    let typed = untrack(shown)
-    if (typed < 1 && total > 0) {
-      // Defensive: an answer always sets the first word, but a bubble with no
-      // word at all is the one frame the user must never see.
-      typed = 1
-      setShown(1)
-    }
-    if (typed >= total) return
-
-    // The word already on screen may itself end a phrase: a restart must not
-    // lose the pause that follows it.
-    let hold = holdsAfter(words[typed - 1] ?? "")
-    let stop: (() => void) | undefined
-    const tick = () => {
-      if (hold) {
-        hold = false
-        return
-      }
-      typed += 1
-      setShown(typed)
-      if (typed >= total) {
-        // The interval must not keep ticking over a finished joke.
-        stop?.()
-        stop = undefined
-        return
-      }
-      // A punctuated word stays on screen for two steps, so the pause reads as
-      // speech rather than a uniform metronome.
-      hold = holdsAfter(words[typed - 1] ?? "")
-    }
-    stop = (props.schedule ?? defaultSchedule)(tick, WORD_FRAME_MS)
-    onCleanup(() => stop?.())
-  })
-
-  createEffect(() => {
-    const renderer = props.renderer
-    const swimSpeed = props.swimSpeed ?? DEFAULT_SWIM_SPEED
-    // Reading `mode` here is what re-runs this effect when the duck starts or
-    // stops, so the timer is started and cleared with the animation. `frozen`
-    // is read for the same reason: a pending form stops the heartbeat
-    // altogether, so the section keeps only the marker's timer while the
-    // question waits, and the swim resumes from the same column afterwards.
-    if (renderer === undefined || swimSpeed <= 0 || mode() === "rest" || frozen()) return
-
-    let accumulated = 0
-
-    const tick = () => {
-      // A tick that arrives after the duck came to rest moves nothing: the
-      // timer is cleared as soon as the mode changes, but a tick already in
-      // flight still runs, and nothing should happen to a resting duck. A
-      // pending form freezes the same way: the current column and heading stay
-      // put until the form closes.
-      if (mode() === "rest" || frozen()) return
-
-      // The water rides the duck's tick, one phase step per tick, at the tempo
-      // derived from the swim speed. `waveSpeed` is zero both when the speed is
-      // off and when the lane is narrower than the art, so the pattern stands
-      // still exactly when the duck does: no second timer, and no second piece
-      // of state that could drift out of step with the first. The phase is kept
-      // inside one period, because the pattern repeats there and a float that
-      // grows all session loses precision for nothing.
-      state.wavePhase = (state.wavePhase + waveSpeed(swimSpeed, limit()) * (TICK_MS / 1000)) % WAVE_PERIOD
-
-      const reach = limit()
-      if (reach === 0) {
-        // A lane narrower than the art has no room to swim in. Sitting at the
-        // left edge, nose inwards, is the closest thing to a correct pose.
-        state.column = 0
-        if (mode() === "dock") setMode("rest")
-        park()
-        paint()
-        renderer.requestRender()
-        return
-      }
-
-      // An existing cow moves before the duck. A cow started by this tick's
-      // crossing is therefore still invisible until the next tick, which gives
-      // it the same short first delay as the five-out, hold, five-back cycle.
-      state.cow = advanceCow(state.cow, TICK_MS, swimSpeed)
-
-      accumulated += TICK_MS
-      const interval = msPerColumn(swimSpeed)
-      let budget = MAX_COLUMNS_PER_TICK
-      while (accumulated >= interval && budget > 0) {
-        accumulated -= interval
-        budget -= 1
-        const from = state.column
-        const heading = state.direction
-        const move = moveTowardsEdge(state.column, state.direction, reach)
-        state.column = move.column
-        state.direction = move.direction
-
-        // The cow is a rare event of a leftward crossing, not of a timer of its
-        // own. Every crossing consumes one roll even while a cow is already
-        // out; the hit is then ignored so only one cow can be on screen.
-        if (mode() === "swim" && heading === -1 && crossedMidline(from, move.column, reach)) {
-          const hit = (props.random ?? Math.random)() < COW_CHANCE
-          if (hit && state.cow === undefined) {
-            state.cow = { columns: 0, accumulated: 0 }
-          }
-        }
-
-        if (move.turned) {
-          // The turn spends the rest of the tick. Without this the leftover
-          // time carries straight into the next column of the new direction and
-          // the duck leaves the wall in the same tick it reached it, so the
-          // turn is never actually drawn.
-          accumulated = 0
-          // A dock ends on the turn, which leaves the duck at a wall. The mode
-          // changes before the paint, so the paint already draws the rest pose,
-          // open beak and bubble included.
-          if (mode() === "dock") {
-            park()
-            setMode("rest")
-            paint()
-            renderer.requestRender()
-            return
-          }
-        }
-      }
-      paint()
-      // One frame per tick, asked for rather than held: the renderer keeps its
-      // own idle behaviour, and the plugin never keeps it alive between ticks.
-      renderer.requestRender()
-    }
-
-    const stop = (props.schedule ?? defaultSchedule)(tick, TICK_MS)
-    onCleanup(stop)
+  startSwim({
+    state,
+    mode,
+    setMode,
+    frozen,
+    limit,
+    swimSpeed: () => props.swimSpeed ?? DEFAULT_SWIM_SPEED,
+    random: () => (props.random ?? Math.random)(),
+    park,
+    paint,
+    requestRender,
+    schedule,
   })
 
   // The reserve above the duck, the three art rows and the lower water row.
@@ -1218,7 +801,7 @@ export function Ducksay(props: {
       onSizeChange={() => {
         setLaneWidth(laneBox?.width ?? 0)
         paint()
-        props.renderer?.requestRender()
+        requestRender()
       }}
     >
       <box flexDirection="row" width="100%" height={1} alignItems="center">
