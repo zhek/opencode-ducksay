@@ -295,6 +295,7 @@ export function cleanJoke(raw: string): string | undefined {
   let text = first.replace(/^(?:шутка|joke)\s*:\s*/i, "").trim()
   text = stripOuterQuotes(text)
   text = text
+    .replace(/[0-9#*]\uFE0F?\u20E3/gu, "")
     .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200D\uFE0F\u20E3]/gu, "")
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
     .replace(/\s+/g, " ")

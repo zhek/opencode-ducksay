@@ -400,6 +400,15 @@ describe("cleanJoke", () => {
     expect(cleanJoke("Привет 🦆 мир")).toBe("Привет мир")
   })
 
+  test("removes recent emoji, flags, skin tones and keycaps", () => {
+    expect(cleanJoke("🫠")).toBeUndefined()
+    expect(cleanJoke("🩷")).toBeUndefined()
+    expect(cleanJoke("🧑🏽‍🚀")).toBeUndefined()
+    expect(cleanJoke("🇫🇷")).toBeUndefined()
+    expect(cleanJoke("1️⃣")).toBeUndefined()
+    expect(cleanJoke("hello 1️⃣ world")).toBe("hello world")
+  })
+
   test("caps the result at 125 characters", () => {
     const cleaned = cleanJoke("a".repeat(130))
     expect(cleaned).toHaveLength(125)

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A keycap emoji such as `1️⃣` in a model answer no longer leaves its base digit in the joke; the whole character is
+  removed.
+
 ## [1.6.0] — 2026-11-08
 
 ### Added
