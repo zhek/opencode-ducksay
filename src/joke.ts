@@ -1,6 +1,7 @@
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { DuckExchange } from "./duck-state.ts"
 import type { LlmModelChoice } from "./options.ts"
+import { DEFAULT_PERSONA, voice as personaVoice } from "./persona.ts"
 
 /**
  * The joke layer: it reads the recent session locally, turns it into one
@@ -96,6 +97,12 @@ export interface JokeGeneratorOptions {
   readonly model?: LlmModelChoice
   /** The raw `llmModel` value, for the `joke.model_unusable` line. */
   readonly modelName?: string
+  /**
+   * The persona's instruction line for the prompt, read when the request is
+   * built so a character switched mid-turn is the one that speaks. Absent in
+   * tests that do not care, which leaves the classic voice.
+   */
+  readonly voice?: () => string
   /** Reports why a request produced no joke; the logger owns the file. */
   readonly onFailure?: (failure: JokeFailure) => void
   readonly timers?: JokeTimers
@@ -247,18 +254,27 @@ export function clipUserText(text: string): string {
  * answer in the language of the last user message, which is also why the
  * depth cannot be zero: the rule would have nothing to read.
  *
+ * `voice` is the persona's instruction line, already worded for the model: it
+ * replaces the single fixed "kind joke" line, so the character speaks in the
+ * prompt while the language rule, the length limit and the ban on joking about
+ * the user stay untouched.
+ *
  * Passing `input` marks a direct call: the user spoke to the duck, so the
  * introduction changes and the dialogue block, when present, follows the
  * recent messages. It is still data, never instructions.
  */
-export function buildJokePrompt(context: JokeContext, input?: JokeInput): string {
+export function buildJokePrompt(
+  context: JokeContext,
+  input?: JokeInput,
+  voice: string = personaVoice(DEFAULT_PERSONA),
+): string {
   const intro = input === undefined
     ? "You are the duck in the OpenCode sidebar. A session turn has just ended, and you want to make a joke about what the user was working on."
     : "You are the duck in the OpenCode sidebar. The user has just spoken to you directly, and you answer with a joke."
   const lines = [
     intro,
     "",
-    "Write one short, kind joke in the duck's voice. Reply with the joke text only, on one line:",
+    voice,
     "- no longer than 100 characters;",
     "- in the language of the user's last message (if it is unclear, use the language of the previous messages);",
     "- no quotes, markdown, emoji, or explanation;",
@@ -408,7 +424,11 @@ export function createJokeGenerator(options: JokeGeneratorOptions): JokeGenerato
         return undefined
       }
       source = read
-      prompt = buildJokePrompt(collectJokeContext(source, options.depth), input)
+      prompt = buildJokePrompt(
+        collectJokeContext(source, options.depth),
+        input,
+        options.voice?.() ?? personaVoice(DEFAULT_PERSONA),
+      )
     } catch (error) {
       report({ kind: "prompt_failed", error })
       return undefined

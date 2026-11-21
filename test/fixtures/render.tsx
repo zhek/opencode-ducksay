@@ -11,6 +11,7 @@ import type { JSX } from "solid-js"
 import type { DuckStates } from "../../src/duck-state.ts"
 import type { JokeClient, JokeInput } from "../../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../../src/options.ts"
+import type { PersonaName } from "../../src/persona.ts"
 import plugin, {
   Ducksay,
   type DuckCommandResult,
@@ -71,6 +72,8 @@ export interface Harness {
   readonly notifies: readonly ("copied" | "failed")[]
   /** Drives the section the way the palette screenshot command does. */
   readonly screenshot: () => DuckScreenshotResult | undefined
+  /** Drives the section the way `/duck.persona` does. */
+  readonly cyclePersona: () => PersonaName | undefined
   /** Frames handed to the screenshot writer, in order. */
   readonly screenshots: readonly { rows: readonly string[]; width: number }[]
   /** Screenshot outcomes the section reported from the icon. */
@@ -109,6 +112,8 @@ export interface MountOptions {
   swimSpeed?: number
   silent?: boolean
   sprites?: DuckSprites
+  /** The persona a new session starts with, as the `persona` option would. */
+  persona?: PersonaName
   bubbleText?: string
   joke?: (signal: AbortSignal, input?: JokeInput) => Promise<string | undefined>
   /** Enables the copy icon; its return value is the clipboard's answer. */
@@ -237,6 +242,7 @@ export async function mount(options: MountOptions = {}): Promise<Harness> {
                 }
               },
               sprites: options.sprites,
+              persona: options.persona,
               bubbleText: options.bubbleText,
               joke: options.joke,
               copy: options.copy === undefined
@@ -300,6 +306,7 @@ export async function mount(options: MountOptions = {}): Promise<Harness> {
     screenshot: () => handle?.screenshot(),
     screenshots,
     shotNotifies,
+    cyclePersona: () => handle?.cyclePersona(),
     mouse: setup.mockMouse,
     formCreated,
     formReplied,

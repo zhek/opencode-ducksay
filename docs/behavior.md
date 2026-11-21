@@ -80,6 +80,22 @@ the question marker keeps working.
 Speech, the wait for the model and how much context goes into the prompt are configured in
 [configuration and options](configuration.md).
 
+## The duck's character
+
+The duck has three characters: `classic`, `angry` and `robot`. Run `/duck.persona` from the `/` list to move the displayed
+session to the next character, in the order `classic → angry → robot → classic`. Each switch comes with a greeting in the
+new voice, for example `>(ó ) Great. Well, look who's back.`
+
+The character changes the art, the head on notices and copied jokes, and the voice a joke is written in. The classic duck
+is warmly ironic, the angry one grumbles about workarounds and duct tape but never about you, and the robot reports on CI,
+builds and metrics in short telegraphic lines. Jokes still follow the language of your last message.
+
+A tab keeps the character it had, so switching away and back returns the duck you left. Restarting OpenCode goes back to
+the `persona` option, `classic` unless you set another. The command changes only the session on screen, and it works with
+`silent: true` — silence turns off speech, not the character. A switch also drops the current remark: a joke on screen
+closes, and a request still on its way is cancelled, so the new character never says the previous one's line. The option
+and its values are in the [configuration reference](configuration.md).
+
 ## Talking to the duck
 
 Type `/duck` while the duck is at rest — including the first rest after start-up — or while its bubble is there, and the
@@ -105,7 +121,8 @@ that fails, comes back empty or takes too long is not added to the dialogue.
 The copy icon `[copy]` sits at the right of the `Ducksay` heading. A left click on it puts the whole latest joke on the
 terminal clipboard, including the part the bubble hides behind `…` and the answer to `/duck`. The text is wrapped as
 `( o)< {joke} (opencode-ducksay)`; the bubble itself stays plain, and copying the same joke twice does not nest the
-wrapper. Control characters are removed and the copied text is capped at 4096 characters.
+wrapper. The head is the classic one: the angry duck copies `( ò)<` and the robot `[ 0]<`, so the clipboard duck matches
+the one on screen. Control characters are removed and the copied text is capped at 4096 characters.
 
 The icon is available while the joke is ready. While the joke is loading, before the first finished turn, while a question
 is open, or with `silent: true`, it is dimmed or hidden and a click does nothing. A successful copy shows `✓` in place of

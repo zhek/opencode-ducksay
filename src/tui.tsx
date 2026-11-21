@@ -11,7 +11,7 @@ import {
   onCleanup,
 } from "solid-js"
 import { BUBBLE_CONTENT_ROWS } from "./bubble.ts"
-import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN } from "./duck.ts"
+import { PERSONA_SPRITES } from "./duck.ts"
 import {
   createDuckState,
   createDuckStates,
@@ -36,9 +36,20 @@ import {
   resolveContextDepth,
   resolveLlmModel,
   resolveLlmTimeout,
+  resolvePersona,
   resolveSilent,
   resolveSwimSpeed,
 } from "./options.ts"
+import {
+  copyGlyph,
+  DEFAULT_PERSONA,
+  greeting,
+  nextPersona,
+  toastHead,
+  voice as personaVoice,
+  type BeakState,
+  type PersonaName,
+} from "./persona.ts"
 import { ScreenshotNamesExhaustedError, ScreenshotSaveError, saveScreenshot } from "./screenshot.ts"
 import { startQuestionMarker, trackForms } from "./section/forms.ts"
 import { createFeedback, sanitizeClipboardText } from "./section/icons.ts"
@@ -62,18 +73,15 @@ export interface DuckSprites {
   readonly leftOpen: readonly string[]
 }
 
-const DEFAULT_SPRITES: DuckSprites = {
-  right: DUCK_RIGHT,
-  left: DUCK_LEFT,
-  rightOpen: DUCK_RIGHT_OPEN,
-  leftOpen: DUCK_LEFT_OPEN,
-}
-
-/** Shown when the duck cannot take a command, with its beak wide open. */
-const BUSY_TOAST = ">(o ) The duck is mid-quack. Try later."
-
-/** Shown when `silent` is on; the duck has nothing to say by configuration. */
-const SILENT_TOAST = "<(o ) The duck keeps mum."
+/** The words each toast carries after the persona's head. */
+const BUSY_MESSAGE = "The duck is mid-quack. Try later."
+const SILENT_MESSAGE = "The duck keeps mum."
+const COPIED_MESSAGE = "Copied to clipboard"
+const EMPTY_COPY_MESSAGE = "The duck hasn't said anything yet."
+const FAILED_COPY_MESSAGE = "The terminal won't take the joke: clipboard is unavailable."
+const SCREENSHOT_SAVED_MESSAGE = "Screenshot saved"
+const FAILED_SCREENSHOT_MESSAGE = "Failed to save screenshot."
+const NO_FRAME_MESSAGE = "The duck isn't in frame yet."
 
 /** The copy glyph shown at the right of the heading. */
 const COPY_ICON = "[copy]"
@@ -85,7 +93,6 @@ const IMG_ICON = "[img]"
 const COPY_DONE = "✓"
 
 /** The wrapper put around a copied joke; the bubble itself stays plain. */
-const COPY_PREFIX = "( o)< "
 const COPY_SUFFIX = " (opencode-ducksay)"
 
 /** What a copy attempt did, so both the icon and the command can report it. */
@@ -93,16 +100,6 @@ export type DuckCopyResult = "copied" | "empty" | "failed"
 
 /** What a screenshot attempt did: written, not possible, or failed to write. */
 export type DuckScreenshotResult = "saved" | "empty" | "failed"
-
-/** Copy feedback shared by the icon and the `/duck.copy` command. */
-const COPIED_TOAST = ">(o ) Copied to clipboard"
-const EMPTY_COPY_TOAST = "<(o ) The duck hasn't said anything yet."
-const FAILED_COPY_TOAST = ">(o ) The terminal won't take the joke: clipboard is unavailable."
-
-/** Screenshot feedback shared by the icon and the `/duck.img` command. */
-const SCREENSHOT_SAVED_TOAST = ">(o ) Screenshot saved"
-const FAILED_SCREENSHOT_TOAST = ">(o ) Failed to save screenshot."
-const NO_FRAME_TOAST = "<(o ) The duck isn't in frame yet."
 
 /** What a `/duck` call did, so `setup` knows which toast to show. */
 export type DuckCommandResult = "started" | "muted" | "busy"
@@ -114,6 +111,11 @@ export interface DuckHandle {
   duck(text: string | undefined): DuckCommandResult
   copy(): DuckCopyResult
   screenshot(): DuckScreenshotResult
+  /**
+   * Switches the displayed session to the next persona and returns its name,
+   * or `undefined` when there is no session to switch.
+   */
+  cyclePersona(): PersonaName | undefined
 }
 
 /**
@@ -150,6 +152,11 @@ export function Ducksay(props: {
   isRunning?: () => boolean
   schedule?: Schedule
   sprites?: DuckSprites
+  /**
+   * The persona a session starts with, taken from the `persona` option. A
+   * session that is already in the store keeps its own character instead.
+   */
+  persona?: PersonaName
   /** The rest bubble's message; tests change it, the plugin never does. */
   bubbleText?: string
   /**
@@ -195,6 +202,7 @@ export function Ducksay(props: {
     : undefined
   let state: DuckState = stored ?? createDuckState({
     jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
+    persona: props.persona ?? DEFAULT_PERSONA,
   })
   if (stored === undefined && props.states !== undefined && initialSessionID !== undefined) {
     props.states.set(initialSessionID, state)
@@ -217,6 +225,9 @@ export function Ducksay(props: {
   const [busy, setBusy] = createSignal(props.isRunning?.() === true)
   const [speech, setSpeech] = createSignal<Speech>(initialSpeech)
   const [jokeText, setJokeText] = createSignal(state.jokeText)
+  // The character this session wears: the art, the toast heads and the copied
+  // head all follow this one signal, and `/duck.persona` is what moves it.
+  const [personaName, setPersonaName] = createSignal<PersonaName>(state.persona)
   // Index into `THINKING_STEPS`: which frame of the waiting dots is on screen.
   const [dotsStep, setDotsStep] = createSignal(state.dotsStep)
   // How many words of the joke have been shown. The answer sets it to `1`, so
@@ -281,7 +292,7 @@ export function Ducksay(props: {
   let paintedRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
   let workRows: string[] = new Array(BUBBLE_CONTENT_ROWS).fill("")
 
-  const sprites = () => props.sprites ?? DEFAULT_SPRITES
+  const sprites = () => props.sprites ?? PERSONA_SPRITES[personaName()]
   const artWidth = createMemo(() => {
     const { right, left, rightOpen, leftOpen } = sprites()
     return Math.max(
@@ -322,6 +333,7 @@ export function Ducksay(props: {
     state.jokeText = jokeText()
     state.dotsStep = dotsStep()
     state.shown = shown()
+    state.persona = personaName()
   }
 
   /**
@@ -351,6 +363,7 @@ export function Ducksay(props: {
     const nextState = nextSessionID !== undefined ? props.states?.get(nextSessionID) : undefined
     state = nextState ?? createDuckState({
       jokeText: props.bubbleText ?? DEFAULT_BUBBLE_TEXT,
+      persona: props.persona ?? DEFAULT_PERSONA,
     })
     if (nextSessionID !== undefined) props.states?.set(nextSessionID, state)
 
@@ -361,6 +374,7 @@ export function Ducksay(props: {
     setJokeText(state.jokeText)
     setDotsStep(state.dotsStep)
     setShown(state.shown)
+    setPersonaName(state.persona)
     setAskedForms(new Set<string>())
     setQuestionFrame(0)
 
@@ -427,7 +441,7 @@ export function Ducksay(props: {
   const copyJoke = (): DuckCopyResult => {
     if (!canCopy()) return "empty"
     try {
-      const accepted = props.copy?.(sanitizeClipboardText(COPY_PREFIX + jokeText().trim() + COPY_SUFFIX))
+      const accepted = props.copy?.(sanitizeClipboardText(copyGlyph(personaName()) + " " + jokeText().trim() + COPY_SUFFIX))
       if (accepted !== true) {
         copyFeedback.clear()
         return "failed"
@@ -695,6 +709,33 @@ export function Ducksay(props: {
     return "started"
   }
 
+  /**
+   * The `/duck.persona` entry point. The section owns the snapshot, so the
+   * switch happens here: the signal changes, the snapshot follows at once, and
+   * the art is repainted. Without a session there is nothing to switch, which
+   * the command reports as `undefined`.
+   */
+  const cyclePersona = (): PersonaName | undefined => {
+    if (props.sessionID === undefined) return undefined
+    const next = nextPersona(personaName())
+    // A joke belongs to the voice that said it: drop a pending request and
+    // close a bubble that is still on screen, so the next words are in the new
+    // character's voice instead of the old one's.
+    if (speech() === "waiting" || speech() === "ready") {
+      cancelJoke("turn")
+      state.pendingReply = undefined
+      setSpeech("idle")
+      setJokeText(props.bubbleText ?? DEFAULT_BUBBLE_TEXT)
+      setShown(0)
+      setDotsStep(0)
+    }
+    setPersonaName(next)
+    state.persona = next
+    paint()
+    requestRender()
+    return next
+  }
+
   // The command lives in `setup`, the speech lives here. The handle is a view
   // on this mount: `sessionID` stays reactive across tab switches, and cleanup
   // removes it so the command cannot reach a disposed section.
@@ -705,6 +746,7 @@ export function Ducksay(props: {
     duck,
     copy: copyJoke,
     screenshot: capture,
+    cyclePersona,
   })
   onCleanup(() => {
     props.expose?.(undefined)
@@ -922,6 +964,7 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
   const llmTimeout = resolveLlmTimeout(context.options)
   const contextDepth = resolveContextDepth(context.options)
   const llmModel = resolveLlmModel(context.options)
+  const optionPersona = resolvePersona(context.options)
   const rawLlmModel = typeof context.options?.llmModel === "string" ? context.options.llmModel : undefined
   for (const diagnostic of diagnoseOptions(context.options)) logConfigDiagnostic(log, diagnostic)
   // Read once, when the section appears: the panel may open in the middle of
@@ -982,12 +1025,24 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
   }
   const showToast = (message: string, variant: "info" | "success" | "error") =>
     context.ui.toast.show({ message, variant, duration: 2000 })
-  const reportCopy = (result: DuckCopyResult) => {
-    if (result === "copied") showToast(COPIED_TOAST, "success")
-    else if (result === "failed") showToast(FAILED_COPY_TOAST, "error")
-    else showToast(EMPTY_COPY_TOAST, "info")
+  /**
+   * The persona the toasts wear: the displayed session's own character, or the
+   * option's when no session is displayed. The clipboard wrapper uses the
+   * section's snapshot directly, so only the toasts need this fallback.
+   */
+  const displayedPersona = (): PersonaName => {
+    const sessionID = currentSession()
+    return (sessionID === undefined ? undefined : states.get(sessionID)?.persona) ?? optionPersona
   }
-  const runCommand = (command: "duck" | "duck.copy" | "duck.img", run: () => void) => {
+  /** One toast message: the persona's head, a space, then the words. */
+  const toast = (beak: BeakState, message: string): string =>
+    `${toastHead(displayedPersona(), beak)} ${message}`
+  const reportCopy = (result: DuckCopyResult) => {
+    if (result === "copied") showToast(toast("open", COPIED_MESSAGE), "success")
+    else if (result === "failed") showToast(toast("open", FAILED_COPY_MESSAGE), "error")
+    else showToast(toast("closed", EMPTY_COPY_MESSAGE), "info")
+  }
+  const runCommand = (command: "duck" | "duck.copy" | "duck.img" | "duck.persona", run: () => void) => {
     try {
       run()
     } catch (error) {
@@ -1003,8 +1058,19 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
     const result = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
       ? handle.duck(input)
       : "busy"
-    if (result === "muted") showToast(SILENT_TOAST, "info")
-    else if (result === "busy") showToast(BUSY_TOAST, "info")
+    if (result === "muted") showToast(toast("closed", SILENT_MESSAGE), "info")
+    else if (result === "busy") showToast(toast("open", BUSY_MESSAGE), "info")
+  })
+  /**
+   * The persona switch stays out of `silent`: the toast is a UI notification,
+   * not duck speech, so the character still changes and greets the user.
+   */
+  const personaCommand = () => runCommand("duck.persona", () => {
+    const sessionID = currentSession()
+    const next = sessionID !== undefined && handle !== undefined && handle.sessionID === sessionID
+      ? handle.cyclePersona()
+      : undefined
+    if (next !== undefined) showToast(greeting(next), "success")
   })
   const copyCommand = () => runCommand("duck.copy", () => {
     const sessionID = currentSession()
@@ -1091,9 +1157,9 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
     }
   }
   const reportScreenshot = (result: DuckScreenshotResult) => {
-    if (result === "saved") showToast(SCREENSHOT_SAVED_TOAST, "success")
-    else if (result === "failed") showToast(FAILED_SCREENSHOT_TOAST, "error")
-    else showToast(NO_FRAME_TOAST, "info")
+    if (result === "saved") showToast(toast("open", SCREENSHOT_SAVED_MESSAGE), "success")
+    else if (result === "failed") showToast(toast("open", FAILED_SCREENSHOT_MESSAGE), "error")
+    else showToast(toast("closed", NO_FRAME_MESSAGE), "info")
   }
   const screenshotCommand = () => runCommand("duck.img", () => {
     const sessionID = currentSession()
@@ -1115,6 +1181,7 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
       primary: context.theme.text.base,
       swimSpeed,
       silent,
+      persona: optionPersona,
       renderer: context.renderer,
       data: context.data,
       get sessionID() {
@@ -1138,6 +1205,7 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
         timeoutMs: llmTimeout,
         model: llmModel,
         modelName: rawLlmModel,
+        voice: () => personaVoice(states.get(input.sessionID)?.persona ?? optionPersona),
         onFailure: (failure) => logJokeFailure(log, failure, input.sessionID),
       })(signal, jokeInput),
     }),
@@ -1175,6 +1243,13 @@ function setupDucksay(context: Context, log: Logger): (() => void) | undefined {
           bind: false,
           slash: { name: "duck.img" },
           run: screenshotCommand,
+        },
+        {
+          id: "duck.persona",
+          title: "Switch the duck's persona",
+          bind: false,
+          slash: { name: "duck.persona" },
+          run: personaCommand,
         },
       ],
     }))

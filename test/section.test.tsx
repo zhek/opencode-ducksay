@@ -3,7 +3,16 @@ import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { ManualClock } from "@opentui/core/testing"
 import { BUBBLE_MAX_LINES, BUBBLE_TEXT_WIDTH, BUBBLE_WIDTH } from "../src/bubble.ts"
-import { DUCK_LEFT, DUCK_RIGHT, DUCK_WIDTH } from "../src/duck.ts"
+import {
+  ANGRY_LEFT,
+  ANGRY_LEFT_OPEN,
+  ANGRY_RIGHT,
+  DUCK_LEFT,
+  DUCK_RIGHT,
+  DUCK_WIDTH,
+  ROBOT_LEFT_OPEN,
+  ROBOT_RIGHT,
+} from "../src/duck.ts"
 import { createDuckState, createDuckStates } from "../src/duck-state.ts"
 import type { JokeInput } from "../src/joke.ts"
 import { DEFAULT_SWIM_SPEED } from "../src/options.ts"
@@ -165,6 +174,140 @@ describe("Ducksay section", () => {
   })
 })
 
+describe("persona art", () => {
+  test("draws the angry duck when the session wears angry", async () => {
+    const harness = await mount({ persona: "angry" })
+    const rows = (await harness.frame()).split("\n")
+    await harness.dispose()
+
+    for (const line of ANGRY_RIGHT) {
+      const row = rows.find((candidate) => candidate.includes(line.trimEnd()))
+      expect(row).toBeDefined()
+      expect(row!.indexOf(line.trimEnd())).toBe(0)
+    }
+  })
+
+  test("draws the robot when the session wears robot", async () => {
+    const harness = await mount({ persona: "robot" })
+    const frame = await harness.frame()
+    await harness.dispose()
+
+    for (const line of ROBOT_RIGHT) expect(frame).toContain(line.trimEnd())
+    expect(frame).not.toContain(DUCK_RIGHT[1])
+  })
+
+  test("opens the persona's beak when the duck speaks", async () => {
+    const harness = await mount({ persona: "angry", running: true })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    await harness.dispose()
+
+    expect(frame).toContain(ANGRY_LEFT_OPEN[1])
+    expect(frame).not.toContain(ANGRY_LEFT[1])
+  })
+
+  test("switches persona in place without rebuilding the section", async () => {
+    const harness = await mount()
+    const before = await harness.frame()
+    expect(before).toContain(DUCK_RIGHT[1])
+    expect(before).not.toContain("╭")
+
+    expect(harness.cyclePersona()).toBe("angry")
+    const angry = await harness.frame()
+    expect(angry).toContain(ANGRY_RIGHT[1])
+    expect(angry).not.toContain(DUCK_RIGHT[1])
+    expect(angry).not.toContain("╭")
+
+    expect(harness.cyclePersona()).toBe("robot")
+    const rows = (await harness.frame()).split("\n")
+    expect(rows.some((row) => row.includes(ROBOT_RIGHT[1]!))).toBe(true)
+    const artRow = rows.find((row) => row.includes(ROBOT_RIGHT[1]!))!
+    expect(artRow.indexOf(ROBOT_RIGHT[1]!)).toBe(0)
+    await harness.dispose()
+  })
+
+  test("the robot's open beak is the robot's, not the classic one", async () => {
+    const harness = await mount({ persona: "robot", running: true })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    await harness.dispose()
+
+    expect(frame).toContain(ROBOT_LEFT_OPEN[1])
+    expect(frame).not.toContain(ANGRY_LEFT_OPEN[1])
+    expect(frame).not.toContain(FACING_LEFT_OPEN)
+  })
+
+  test("keeps each session's persona across a tab switch", async () => {
+    const states = createDuckStates()
+    const harness = await mount({ states })
+    expect(harness.cyclePersona()).toBe("angry")
+    await harness.frame()
+
+    harness.setSession("ses_other")
+    const other = await harness.frame()
+    expect(other).toContain(DUCK_RIGHT[1])
+
+    harness.setSession(SESSION)
+    const back = await harness.frame()
+    expect(back).toContain(ANGRY_RIGHT[1])
+    await harness.dispose()
+  })
+
+  async function restWith(options: MountOptions = {}) {
+    const harness = await mount({ running: true, ...options })
+    await harness.advance(COLUMN_MS * 3)
+    harness.setRunning(false)
+    const frame = await harness.tick(RIGHT_EDGE + 2)
+    return { harness, frame }
+  }
+
+  async function flush() {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  }
+
+  test("closes a displayed joke when the persona changes", async () => {
+    const { harness, frame } = await restWith({ bubbleText: "quack", copy: () => true })
+    expect(frame).toContain("╭")
+    expect(frame).toContain("quack")
+
+    expect(harness.cyclePersona()).toBe("angry")
+    const after = await harness.frame()
+    const copied = harness.copy()
+    await harness.dispose()
+
+    expect(after).not.toContain("╭")
+    expect(after).not.toContain("quack")
+    expect(after).toContain(ANGRY_LEFT[1])
+    expect(copied).toBe("empty")
+  })
+
+  test("cancels a request in flight and ignores its late answer", async () => {
+    const calls: { resolve: (value: string | undefined) => void; signal: AbortSignal }[] = []
+    const joke = (signal: AbortSignal) =>
+      new Promise<string | undefined>((resolve) => {
+        calls.push({ resolve, signal })
+      })
+    const { harness, frame } = await restWith({ joke })
+    expect(frame).toContain("╭")
+    expect(calls).toHaveLength(1)
+
+    expect(harness.cyclePersona()).toBe("angry")
+    const waiting = await harness.frame()
+    calls[0]!.resolve("late joke")
+    await flush()
+    const after = await harness.frame()
+    await harness.dispose()
+
+    expect(calls[0]!.signal.aborted).toBe(true)
+    expect(waiting).not.toContain("╭")
+    expect(after).not.toContain("late joke")
+    expect(after).not.toContain("╭")
+    expect(after).toContain(ANGRY_LEFT[1])
+  })
+})
+
 describe("copy icon", () => {
   async function rest(options: MountOptions = {}) {
     const harness = await mount({ running: true, ...options })
@@ -240,6 +383,42 @@ describe("copy icon", () => {
     expect(after).toContain(COPY_DONE)
     expect(after).not.toContain(COPY_PREFIX)
     expect(after).not.toContain(COPY_SUFFIX)
+  })
+
+  test("wraps the copied joke in the persona's head", async () => {
+    const { harness } = await rest({ persona: "angry", bubbleText: "quack", copy: () => true })
+
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual(["( ò)< quack (opencode-ducksay)"])
+  })
+
+  test("copies the robot head once per copy", async () => {
+    const { harness } = await rest({ persona: "robot", bubbleText: "beep", copy: () => true })
+
+    await clickIcon(harness)
+    await clickIcon(harness)
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toHaveLength(2)
+    for (const copy of harness.copies) expect(copy).toBe("[ 0]< beep (opencode-ducksay)")
+  })
+
+  test("a persona switch drops the joke instead of re-copying it", async () => {
+    const { harness } = await rest({ bubbleText: "quack", copy: () => true })
+
+    await clickIcon(harness)
+    expect(harness.cyclePersona()).toBe("angry")
+    await harness.frame()
+    const copiedAfterSwitch = harness.copy()
+    await harness.frame()
+    await harness.dispose()
+
+    expect(harness.copies).toEqual(["( o)< quack (opencode-ducksay)"])
+    expect(copiedAfterSwitch).toBe("empty")
   })
 
   test("copies a /duck answer in full", async () => {

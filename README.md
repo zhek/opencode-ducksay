@@ -14,6 +14,13 @@ A tiny ASCII duck paddles around your OpenCode sidebar and drops funny remarks a
 
 Type `/duck <text>` in the TUI to talk to the duck. The dialogue never enters the session's context or transcript.
 
+## Characters
+
+The duck has three characters: `classic`, `angry` and `robot`. Run `/duck.persona` to switch the session on screen to the
+next one; the art, the notices and the jokes change with it, and the duck greets you in its new voice. To start a session
+with another character, set the `persona` option. A switch lasts until OpenCode restarts, and every session keeps its own
+character.
+
 ## Screenshots
 
 Click `[img]` in the `Ducksay` heading, or run `/duck.img`, to save the duck's scene as a PNG. Pictures go to
@@ -52,7 +59,7 @@ instead.
 - [How the duck behaves](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.md) — swimming, jokes,
   questions, talking to the duck and the water.
 - [Configuration and options](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.md) — `swimSpeed`,
-  `silent`, `llmTimeout`, `llmContextDepth`, `llmModel` and the sidebar settings.
+  `silent`, `persona`, `llmTimeout`, `llmContextDepth`, `llmModel` and the sidebar settings.
 
 ## License
 

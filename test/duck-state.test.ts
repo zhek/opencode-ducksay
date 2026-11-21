@@ -20,8 +20,21 @@ describe("duck state", () => {
       jokeText: "Quack-quack!",
       shown: 0,
       dotsStep: 0,
+      persona: "classic",
       dialogue: [],
     })
+  })
+
+  test("takes the persona it is given and defaults to the classic one", () => {
+    expect(createDuckState({ jokeText: "Quack-quack!", persona: "robot" }).persona).toBe("robot")
+    expect(createDuckState({ jokeText: "Quack-quack!" }).persona).toBe("classic")
+  })
+
+  test("keeps the persona when an exchange is added", () => {
+    const state = createDuckState({ jokeText: "Quack-quack!", persona: "angry" })
+    state.dialogue = appendExchange(state.dialogue, { duck: "wonderful" })
+
+    expect(state.persona).toBe("angry")
   })
 
   test("keeps the bubble fields it is given", () => {

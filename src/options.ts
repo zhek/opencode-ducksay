@@ -1,5 +1,6 @@
 import type { ModelRef } from "@opencode/client"
 import type { PluginOptions } from "@opencode/plugin/options"
+import { DEFAULT_PERSONA, isPersonaName, type PersonaName } from "./persona.ts"
 
 /** Columns per second the duck swims at when the user sets nothing. */
 export const DEFAULT_SWIM_SPEED = 10
@@ -20,7 +21,7 @@ export const DEFAULT_CONTEXT_DEPTH = 2
 export const MAX_CONTEXT_DEPTH = 10
 
 /** The options whose invalid values are reported in the log. */
-export type ConfigOption = "swimSpeed" | "llmTimeout" | "llmContextDepth" | "llmModel" | "silent"
+export type ConfigOption = "swimSpeed" | "llmTimeout" | "llmContextDepth" | "llmModel" | "silent" | "persona"
 
 /** Why a value was not used as written. */
 export type ConfigReason = "fallback" | "capped" | "unusable"
@@ -29,7 +30,8 @@ export type ConfigReason = "fallback" | "capped" | "unusable"
 export interface ConfigDiagnostic {
   readonly option: ConfigOption
   readonly value: unknown
-  readonly effective: number | null
+  /** What was used instead: a number, a persona name, or nothing usable. */
+  readonly effective: number | string | null
   readonly reason: ConfigReason
   readonly message: string
 }
@@ -270,6 +272,42 @@ function readSilent(options: PluginOptions | undefined): Reading<boolean> {
   }
 }
 
+/**
+ * Reads `persona` out of the plugin options and returns the duck's character.
+ *
+ * The value is one of `classic`, `angry` or `robot`, written as a string. The
+ * same defensive rules as the other options apply, because a typo must not
+ * leave the duck in a character the user did not ask for:
+ *
+ * - no option, or `null` → `classic`, the character every user already has;
+ * - a string is trimmed and lowercased, so `" Robot "` is `robot`;
+ * - a blank string, an unknown name, a number, a boolean or an object →
+ *   `classic` and a `config.invalid` diagnostic, because the user asked for a
+ *   character and did not get it.
+ */
+export function resolvePersona(options: PluginOptions | undefined): PersonaName {
+  return readPersona(options).value
+}
+
+function readPersona(options: PluginOptions | undefined): Reading<PersonaName> {
+  const raw = options?.persona
+  if (raw === undefined || raw === null) return { value: DEFAULT_PERSONA }
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase()
+    if (isPersonaName(normalized)) return { value: normalized }
+  }
+  return {
+    value: DEFAULT_PERSONA,
+    diagnostic: {
+      option: "persona",
+      value: raw,
+      effective: DEFAULT_PERSONA,
+      reason: "fallback",
+      message: "The persona option is invalid.",
+    },
+  }
+}
+
 /** One diagnostic per option whose value was not used as written. */
 export function diagnoseOptions(options: PluginOptions | undefined): ConfigDiagnostic[] {
   const readings = [
@@ -278,6 +316,7 @@ export function diagnoseOptions(options: PluginOptions | undefined): ConfigDiagn
     readContextDepth(options),
     readLlmModel(options),
     readSilent(options),
+    readPersona(options),
   ]
   return readings.flatMap((reading) => (reading.diagnostic === undefined ? [] : [reading.diagnostic]))
 }
