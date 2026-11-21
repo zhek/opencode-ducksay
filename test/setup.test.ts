@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionInfo } from "@opencode/client"
 import type { JokeClient } from "../src/joke.ts"
+import { voice } from "../src/persona.ts"
 import plugin from "../src/tui.tsx"
 import {
   DEAD_DEFAULT,
@@ -1470,6 +1471,182 @@ describe("logging", () => {
     } finally {
       await mounted.close()
       rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the /duck.persona command", () => {
+  const personaCommand = (harness: Fake): RegisteredCommand =>
+    harness.commands.find((entry) => entry.id === "duck.persona")!
+
+  const greetingToast = (message: string) => ({ message, variant: "success", duration: 2000 })
+
+  /** Ends a turn and waits for the fallback joke, so the bubble is ready. */
+  async function rest(mounted: Mounted): Promise<string> {
+    mounted.harness.emit("session.execution.succeeded", forSession)
+    await settle()
+    let last = ""
+    for (let step = 0; step < 120; step += 1) {
+      last = await mounted.swim(1, 200)
+      if (last.includes("Quack-quack!")) return last
+    }
+    throw new Error(`the persona command test never reached a rest bubble:\n${last}`)
+  }
+
+  test("registers a slash-only command with the persona title", async () => {
+    const harness = fake()
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      const command = personaCommand(harness)
+      expect(command.id).toBe("duck.persona")
+      expect(command.title).toBe("Switch the duck's persona")
+      expect(command.slash).toEqual({ name: "duck.persona" })
+      expect(command.bind).toBe(false)
+      expect(command.palette).toBeUndefined()
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("cycles classic, angry, robot and back, greeting in the new persona", async () => {
+    const mounted = await mountClaim({ session: sessionInfo() })
+
+    try {
+      personaCommand(mounted.harness).run()
+      await settle()
+      expect(mounted.harness.toasts).toEqual([greetingToast(">(ó ) Great. Well, look who's back.")])
+
+      personaCommand(mounted.harness).run()
+      await settle()
+      expect(mounted.harness.toasts[1]).toEqual(greetingToast(">[0 ] PERSONA LOADED. UPTIME 100%."))
+
+      personaCommand(mounted.harness).run()
+      await settle()
+      expect(mounted.harness.toasts[2]).toEqual(greetingToast(">(o ) Quack! There you are."))
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("redraws the art in the same mount", async () => {
+    const mounted = await mountClaim({ session: sessionInfo() })
+
+    try {
+      expect(await mounted.frame()).toContain("___( o)>")
+
+      personaCommand(mounted.harness).run()
+      const after = await mounted.frame()
+
+      expect(after).toContain("___( ò)>")
+      expect(after).not.toContain("___( o)>")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("switches while silent and still greets", async () => {
+    const mounted = await mountClaim({ session: sessionInfo(), options: { silent: true } })
+
+    try {
+      personaCommand(mounted.harness).run()
+      await settle()
+
+      expect(mounted.harness.toasts).toEqual([greetingToast(">(ó ) Great. Well, look who's back.")])
+      expect(await mounted.frame()).toContain("___( ò)>")
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("does nothing without a mounted section", async () => {
+    const harness = fake({ options: { persona: "robot" } })
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      personaCommand(harness).run()
+
+      expect(harness.toasts).toHaveLength(0)
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("does nothing for a session the section does not show", async () => {
+    const mounted = await mountClaim({ session: sessionInfo() })
+
+    try {
+      mounted.setSession(OTHER_SESSION)
+      personaCommand(mounted.harness).run()
+      await settle()
+
+      expect(mounted.harness.toasts).toHaveLength(0)
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("the copied joke and its toast wear the persona's head", async () => {
+    const mounted = await mountClaim({
+      running: true,
+      session: sessionInfo(),
+      options: { persona: "robot" },
+      copyResult: true,
+    })
+
+    try {
+      await rest(mounted)
+      mounted.harness.commands.find((entry) => entry.id === "duck.copy")!.run()
+      await settle()
+
+      expect(mounted.copies).toEqual(["[ 0]< Quack-quack! (opencode-ducksay)"])
+      expect(mounted.harness.toasts).toEqual([
+        { message: ">[0 ] Copied to clipboard", variant: "success", duration: 2000 },
+      ])
+    } finally {
+      await mounted.close()
+    }
+  })
+
+  test("toasts without a section wear the option's persona", async () => {
+    const harness = fake({ options: { persona: "robot" } })
+    const cleanup = (await plugin.setup(harness.context)) as () => void
+    const unmount = await mountCommands(harness)
+
+    try {
+      harness.commands.find((entry) => entry.id === "duck.copy")!.run()
+
+      expect(harness.toasts).toEqual([
+        { message: "<[0 ] The duck hasn't said anything yet.", variant: "info", duration: 2000 },
+      ])
+    } finally {
+      await unmount()
+      await cleanup()
+    }
+  })
+
+  test("the joke prompt carries the session's persona voice", async () => {
+    const deferred = deferredClient()
+    const mounted = await mountClaim({
+      session: sessionInfo(),
+      client: deferred.client,
+      options: { persona: "robot" },
+    })
+
+    try {
+      mounted.harness.commands.find((entry) => entry.id === "duck.talk")!.run("hello")
+      await settle()
+
+      const prompt = deferred.calls[0]!.input.prompt
+      expect(prompt).toContain(voice("robot"))
+      expect(prompt).not.toContain(voice("classic"))
+      expect(prompt.toLowerCase()).not.toContain("robot")
+    } finally {
+      await mounted.close()
     }
   })
 })

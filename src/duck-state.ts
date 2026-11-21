@@ -1,4 +1,5 @@
 import type { Direction } from "./lane.ts"
+import { DEFAULT_PERSONA, type PersonaName } from "./persona.ts"
 
 /**
  * State that belongs to one session rather than to one mount of the section.
@@ -82,6 +83,11 @@ export interface DuckState {
   shown: number
   /** Which frame of the waiting dots is on screen. */
   dotsStep: number
+  /**
+   * The character this session wears. It starts from the `persona` option and
+   * is changed only by `/duck.persona`, so the tab keeps its duck.
+   */
+  persona: PersonaName
   /** Exchanges with the user, oldest first; at most `DIALOGUE_LIMIT`. */
   dialogue: DuckExchange[]
   /**
@@ -100,7 +106,7 @@ export function createDuckStates(): DuckStates {
 }
 
 /** The state a session starts with before the duck has done anything. */
-export function createDuckState(init: { jokeText: string }): DuckState {
+export function createDuckState(init: { jokeText: string; persona?: PersonaName }): DuckState {
   return {
     column: 0,
     direction: 1,
@@ -110,6 +116,7 @@ export function createDuckState(init: { jokeText: string }): DuckState {
     jokeText: init.jokeText,
     shown: 0,
     dotsStep: 0,
+    persona: init.persona ?? DEFAULT_PERSONA,
     dialogue: [],
   }
 }

@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { DUCK_LEFT, DUCK_LEFT_OPEN, DUCK_RIGHT, DUCK_RIGHT_OPEN, DUCK_WIDTH } from "../src/duck.ts"
+import {
+  DUCK_LEFT,
+  DUCK_LEFT_OPEN,
+  DUCK_RIGHT,
+  DUCK_RIGHT_OPEN,
+  DUCK_WIDTH,
+  PERSONA_SPRITES,
+  type PersonaSprites,
+} from "../src/duck.ts"
+import type { PersonaName } from "../src/persona.ts"
 
 /**
  * `SESSION_SIDEBAR_WIDTH` (42) minus `paddingLeft`/`paddingRight` (2 each) and
@@ -17,7 +26,18 @@ const SPRITES = {
 } as const
 
 /** Glyphs that do not look like themselves after a horizontal flip. */
-const MIRRORED_GLYPHS: Record<string, string> = { "<": ">", ">": "<", "(": ")", ")": "(", "/": "\\", "\\": "/" }
+const MIRRORED_GLYPHS: Record<string, string> = {
+  "<": ">",
+  ">": "<",
+  "(": ")",
+  ")": "(",
+  "/": "\\",
+  "\\": "/",
+  "ó": "ò",
+  "ò": "ó",
+  "[": "]",
+  "]": "[",
+}
 
 function mirrorLine(line: string): string {
   return line
@@ -104,5 +124,51 @@ describe("duck sprites", () => {
     // much narrower would mean OpenCode's sidebar changed shape.
     expect(DUCK_WIDTH).toBe(8)
     expect(PANEL_CONTENT_WIDTH).toBe(37)
+  })
+})
+
+const PERSONAS = Object.entries(PERSONA_SPRITES) as [PersonaName, PersonaSprites][]
+
+describe.each(PERSONAS)("%s persona", (_name, sprites) => {
+  test("has four sprites of three lines exactly the block width", () => {
+    for (const sprite of Object.values(sprites)) {
+      expect(sprite).toHaveLength(3)
+      for (const line of sprite) expect(line.length).toBe(DUCK_WIDTH)
+    }
+  })
+
+  test("mirrors the left sprites into the right ones", () => {
+    expect([...sprites.right]).toEqual(sprites.left.map(mirrorLine))
+    expect([...sprites.rightOpen]).toEqual(sprites.leftOpen.map(mirrorLine))
+  })
+
+  test("mirrors twice back to the original", () => {
+    expect([...sprites.left]).toEqual(sprites.right.map(mirrorLine))
+    expect([...sprites.leftOpen]).toEqual(sprites.rightOpen.map(mirrorLine))
+  })
+
+  test("opens only the head line", () => {
+    expect([sprites.left[0], sprites.left[2]]).toEqual([sprites.leftOpen[0], sprites.leftOpen[2]])
+    expect([sprites.right[0], sprites.right[2]]).toEqual([sprites.rightOpen[0], sprites.rightOpen[2]])
+    expect(sprites.leftOpen[1]).not.toBe(sprites.left[1])
+    expect(sprites.rightOpen[1]).not.toBe(sprites.right[1])
+  })
+})
+
+describe("persona art", () => {
+  test("every persona shares the top and bottom lines", () => {
+    // Only the head line may differ: a different outline would move the duck
+    // and change the lane limit.
+    for (const [, sprites] of PERSONAS) {
+      expect(sprites.left[0]).toBe(PERSONA_SPRITES.classic.left[0])
+      expect(sprites.left[2]).toBe(PERSONA_SPRITES.classic.left[2])
+      expect(sprites.right[0]).toBe(PERSONA_SPRITES.classic.right[0])
+      expect(sprites.right[2]).toBe(PERSONA_SPRITES.classic.right[2])
+    }
+  })
+
+  test("the personas differ in the head line", () => {
+    const heads = PERSONAS.map(([, sprites]) => sprites.left[1])
+    expect(new Set(heads).size).toBe(PERSONAS.length)
   })
 })

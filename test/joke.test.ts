@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ModelRef, Project, SessionInfo, SessionMessageInfo } from "@opencode/client"
+import { PERSONA_ORDER, voice } from "../src/persona.ts"
 import {
   buildJokePrompt,
   cleanJoke,
@@ -1085,5 +1086,45 @@ describe("joke failures", () => {
     })
 
     await expect(generator(new AbortController().signal)).resolves.toBe("Quack!")
+  })
+})
+
+describe("buildJokePrompt persona voice", () => {
+  test("uses the persona's instruction line exactly once", () => {
+    for (const name of PERSONA_ORDER) {
+      const prompt = buildJokePrompt({ messages: [] }, undefined, voice(name))
+
+      expect(prompt).toContain(voice(name))
+      expect(prompt.match(/Reply with the joke text only, on one line:/g)).toHaveLength(1)
+    }
+  })
+
+  test("never names the persona in the prompt", () => {
+    for (const name of PERSONA_ORDER) {
+      const prompt = buildJokePrompt({ messages: [] }, undefined, voice(name)).toLowerCase()
+
+      expect(prompt).not.toContain(name)
+    }
+  })
+
+  test("keeps the language rule, the length limit and the ban on joking about the user", () => {
+    for (const name of PERSONA_ORDER) {
+      const prompt = buildJokePrompt({ messages: [] }, undefined, voice(name))
+
+      expect(prompt).toContain("in the language of the user's last message")
+      expect(prompt).toContain("no longer than 100 characters")
+      expect(prompt).toContain("never about the user")
+    }
+  })
+
+  test("a direct call keeps the same voice and the direct introduction", () => {
+    const prompt = buildJokePrompt({ messages: [] }, { text: "hello" }, voice("robot"))
+
+    expect(prompt).toContain(voice("robot"))
+    expect(prompt).toContain("The user has just spoken to you directly")
+  })
+
+  test("defaults to the classic voice when none is passed", () => {
+    expect(buildJokePrompt({ messages: [] })).toContain(voice("classic"))
   })
 })

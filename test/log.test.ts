@@ -381,4 +381,25 @@ describe("log events", () => {
       })
     })
   })
+
+  test("maps an invalid persona with the classic fallback", () => {
+    inProject((directory) => {
+      const logger = createLogger({ directory: () => directory, now: () => NOW, pid: PID })
+      const [diagnostic] = diagnoseOptions({ persona: "pirate" })
+      logConfigDiagnostic(logger, diagnostic!)
+
+      const line = JSON.parse(logLines(directory)[0]!)
+      expect(line).toMatchObject({
+        level: "warn",
+        event: "config.invalid",
+        message: "The persona option is invalid.",
+        data: {
+          option: "persona",
+          value: "pirate",
+          effective: "classic",
+          reason: "fallback",
+        },
+      })
+    })
+  })
 })

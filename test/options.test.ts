@@ -10,9 +10,11 @@ import {
   resolveContextDepth,
   resolveLlmModel,
   resolveLlmTimeout,
+  resolvePersona,
   resolveSilent,
   resolveSwimSpeed,
 } from "../src/options.ts"
+import { DEFAULT_PERSONA } from "../src/persona.ts"
 
 describe("resolveSwimSpeed", () => {
   test("defaults to ten columns per second", () => {
@@ -267,6 +269,35 @@ describe("resolveSilent", () => {
     expect(resolveSilent({ silent: {} })).toBe(false)
   })
 })
+describe("resolvePersona", () => {
+  test("defaults to the classic duck", () => {
+    expect(DEFAULT_PERSONA).toBe("classic")
+    expect(resolvePersona(undefined)).toBe("classic")
+    expect(resolvePersona({})).toBe("classic")
+    expect(resolvePersona({ persona: null })).toBe("classic")
+  })
+
+  test("reads the three names", () => {
+    expect(resolvePersona({ persona: "classic" })).toBe("classic")
+    expect(resolvePersona({ persona: "angry" })).toBe("angry")
+    expect(resolvePersona({ persona: "robot" })).toBe("robot")
+  })
+
+  test("ignores case and surrounding spaces", () => {
+    expect(resolvePersona({ persona: " ROBOT " })).toBe("robot")
+    expect(resolvePersona({ persona: "Angry" })).toBe("angry")
+  })
+
+  test("falls back for an unknown name, a blank string and other types", () => {
+    expect(resolvePersona({ persona: "pirate" })).toBe("classic")
+    expect(resolvePersona({ persona: "" })).toBe("classic")
+    expect(resolvePersona({ persona: "   " })).toBe("classic")
+    expect(resolvePersona({ persona: 3 })).toBe("classic")
+    expect(resolvePersona({ persona: true })).toBe("classic")
+    expect(resolvePersona({ persona: { name: "angry" } })).toBe("classic")
+  })
+})
+
 describe("diagnoseOptions", () => {
   test("reports nothing for unset, null and valid values", () => {
     expect(diagnoseOptions(undefined)).toEqual([])
@@ -369,6 +400,7 @@ describe("diagnoseOptions", () => {
       llmContextDepth: 99,
       llmModel: "haiku",
       silent: "maybe",
+      persona: "pirate",
     })
 
     expect(diagnostics.map((diagnostic) => diagnostic.option)).toEqual([
@@ -377,6 +409,7 @@ describe("diagnoseOptions", () => {
       "llmContextDepth",
       "llmModel",
       "silent",
+      "persona",
     ])
   })
 
@@ -395,5 +428,21 @@ describe("diagnoseOptions", () => {
     expect(diagnoseOptions({ silent: false })).toEqual([])
     expect(diagnoseOptions({ silent: "true" })).toEqual([])
     expect(diagnoseOptions({ silent: " FALSE " })).toEqual([])
+  })
+
+  test("reports an invalid persona with the classic fallback", () => {
+    expect(diagnoseOptions({ persona: "pirate" })).toEqual([
+      {
+        option: "persona",
+        value: "pirate",
+        effective: "classic",
+        reason: "fallback",
+        message: "The persona option is invalid.",
+      },
+    ])
+    expect(diagnoseOptions({ persona: "  " })).toHaveLength(1)
+    expect(diagnoseOptions({ persona: 3 })).toHaveLength(1)
+    expect(diagnoseOptions({ persona: "classic" })).toEqual([])
+    expect(diagnoseOptions({ persona: " Angry " })).toEqual([])
   })
 })

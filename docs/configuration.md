@@ -2,8 +2,8 @@
 
 [Русская версия](configuration.ru.md)
 
-`opencode-ducksay` has five options: `swimSpeed`, `silent`, `llmTimeout`, `llmContextDepth` and `llmModel`. All are
-optional, and each section below lists what happens when it is not set.
+`opencode-ducksay` has six options: `swimSpeed`, `silent`, `persona`, `llmTimeout`, `llmContextDepth` and `llmModel`.
+All are optional, and each section below lists what happens when it is not set.
 
 See [how the duck behaves](behavior.md) for the animation, jokes, questions and the water.
 
@@ -71,6 +71,30 @@ Turns the duck's speech off.
 | `0`, another word, an object | Speech stays on; the invalid value is reported in the diagnostic log |
 
 To get a duck that neither moves nor speaks, combine both options: `{ "swimSpeed": 0, "silent": true }`.
+
+## `persona`
+
+Which character the duck wears. It changes the art, the head on notices and copied jokes, and the tone of the jokes.
+
+```json
+{
+  "plugins": [{ "package": "opencode-ducksay", "options": { "persona": "robot" } }]
+}
+```
+
+| Value | Result |
+| --- | --- |
+| not set | `classic` — the duck you already know |
+| `classic` | Warm irony, head `<(o )` |
+| `angry` | Sarcasm about workarounds, crutches and duct tape — never about you, head `<(ó )` |
+| `robot` | A telegraphic machine report about CI, builds and metrics, head `<[0 ]` |
+| the same name in another case or with spaces, `" ROBOT "` | Read as that character |
+| another word, a number, an empty value | Falls back to `classic`; the invalid value is reported in the diagnostic log |
+
+The option is the character a session starts with. `/duck.persona` switches the displayed session to the next one —
+`classic`, `angry`, `robot`, then `classic` again — and the switch lasts until OpenCode restarts or the plugin reloads.
+Each session keeps its own character, so a tab you return to is the duck you left, and a new session starts from the
+option. `silent: true` does not block the switch: it turns off speech, not the character.
 
 ## `llmTimeout`
 

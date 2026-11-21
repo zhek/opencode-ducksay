@@ -14,6 +14,12 @@
 
 Введите `/duck <текст>` в TUI, чтобы поговорить с уточкой. Диалог не попадает в контекст или историю сессии.
 
+## Характеры
+
+У уточки три характера: `classic`, `angry` и `robot`. Выполните `/duck.persona`, чтобы переключить сессию на экране на
+следующий: вместе с ним меняются арт, уведомления и шутки, а уточка здоровается новым голосом. Стартовый характер
+задаётся опцией `persona`. Переключение живёт до перезапуска OpenCode, и у каждой сессии свой характер.
+
 ## Скриншоты
 
 Нажмите `[img]` в заголовке `Ducksay` или выполните `/duck.img` — сцена с уточкой сохранится в PNG. Файлы лежат в
@@ -52,7 +58,7 @@ opencode plugin add opencode-ducksay
 - [Как ведёт себя уточка](https://github.com/zhek/opencode-ducksay/blob/main/docs/behavior.ru.md) — плавание, шутки,
   вопросы, разговор с уточкой и вода.
 - [Конфигурация и опции](https://github.com/zhek/opencode-ducksay/blob/main/docs/configuration.ru.md) — `swimSpeed`,
-  `silent`, `llmTimeout`, `llmContextDepth`, `llmModel` и настройки боковой панели.
+  `silent`, `persona`, `llmTimeout`, `llmContextDepth`, `llmModel` и настройки боковой панели.
 
 ## Лицензия
 

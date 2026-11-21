@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- The duck has three characters: `classic`, `angry` and `robot`. The `persona` option sets the starting character, and
+  `/duck.persona` switches the displayed session to the next one with a greeting in the new voice. The character changes
+  the art, the head on notices and copied jokes, and the voice a joke is written in — warm irony, sarcasm about
+  workarounds and duct tape, or a telegraphic report about CI and metrics. A switch lasts until OpenCode restarts; the
+  default is `classic`. Switching also drops the current remark: a joke on screen closes and a request still on its way
+  is cancelled, so the new character never says the previous one's line.
+
 ### Fixed
 
 - A keycap emoji such as `1️⃣` in a model answer no longer leaves its base digit in the joke; the whole character is
